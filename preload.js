@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose meeting detection and permission API to renderer process
+// Expose meeting detection, permission, and audio API to renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // Meeting detection
   getMeetings: () => ipcRenderer.invoke('meetings:get'),
@@ -26,4 +26,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   grantPermissions: () => ipcRenderer.invoke('permissions:grant'),
   denyPermissions: () => ipcRenderer.invoke('permissions:deny'),
   resetPermissions: () => ipcRenderer.invoke('permissions:reset'),
+
+  // Audio recording + local Whisper transcription
+  transcribeAudio: (meetingId, chunkIndex, buffer) =>
+    ipcRenderer.invoke('audio:transcribe', meetingId, chunkIndex, buffer),
+  getRecordingsPath: () => ipcRenderer.invoke('audio:get-recordings-path'),
+
+  // Save meeting summary as .txt
+  saveSummary: (meetingId, summaryText, meetingTitle) =>
+    ipcRenderer.invoke('summary:save', meetingId, summaryText, meetingTitle),
+
+  // Desktop capturer (for system audio)
+  getDesktopSources: () => ipcRenderer.invoke('desktop-capturer:get-sources'),
 });

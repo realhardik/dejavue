@@ -27,6 +27,13 @@ interface ElectronAPI {
     grantPermissions: () => Promise<boolean>
     denyPermissions: () => Promise<boolean>
     resetPermissions: () => Promise<boolean>
+    // Audio recording + local Whisper transcription
+    transcribeAudio: (meetingId: string, chunkIndex: number, buffer: ArrayBuffer) => Promise<{ success: boolean; text: string; error?: string }>
+    getRecordingsPath: () => Promise<string>
+    // Save summary
+    saveSummary: (meetingId: string, summaryText: string, meetingTitle: string) => Promise<{ success: boolean; filePath?: string; error?: string }>
+    // Desktop capturer
+    getDesktopSources: () => Promise<{ id: string; name: string }[]>
 }
 
 declare global {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, session, desktopCapturer } = require('electron');
 const path = require('path');
 const { exec } = require('child_process');
 const fs = require('fs');
@@ -326,6 +326,11 @@ function openChatWindow(meeting) {
     return;
   }
 
+  // Generate a unique meeting ID for this recording session
+  const meetingId = `meeting-${Date.now()}`;
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings', meetingId);
+  fs.mkdirSync(recordingsDir, { recursive: true });
+
   chatWindow = new BrowserWindow({
     width: 480,
     height: 650,
@@ -340,8 +345,8 @@ function openChatWindow(meeting) {
   });
 
   const chatUrl = isDev
-    ? `http://localhost:3000/dashboard/ai-chat?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}`
-    : `file://${path.join(__dirname, 'out/dashboard/ai-chat.html')}?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}`;
+    ? `http://localhost:3000/dashboard/ai-chat?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`
+    : `file://${path.join(__dirname, 'out/dashboard/ai-chat.html')}?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`;
 
   chatWindow.loadURL(chatUrl);
   chatWindow.on('closed', () => { chatWindow = null; });
@@ -384,8 +389,8 @@ function restartMonitoring() {
 // ──────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: 1000,
+    height: 700,
     minWidth: 1000,
     minHeight: 700,
     webPreferences: {
@@ -437,6 +442,138 @@ ipcMain.handle('permissions:deny', () => {
   return false;
 });
 
+// Audio recording + Local Whisper transcription IPC
+ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer) => {
+  console.log(`[Dejavue DEBUG] audio:transcribe called - meetingId: ${meetingId}, chunk: ${chunkIndex}, buffer size: ${buffer?.byteLength || 0}`);
+
+  const os = require('os');
+  const tmpDir = path.join(os.tmpdir(), 'dejavue-audio');
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  // Also save to recordings directory
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings', meetingId);
+  fs.mkdirSync(recordingsDir, { recursive: true });
+
+  const webmPath = path.join(tmpDir, `chunk_${meetingId}_${chunkIndex}.webm`);
+  const savedPath = path.join(recordingsDir, `chunk_${chunkIndex}.webm`);
+
+  try {
+    // Save the audio buffer
+    const audioBuffer = Buffer.from(buffer);
+    fs.writeFileSync(webmPath, audioBuffer);
+    fs.writeFileSync(savedPath, audioBuffer);
+    console.log(`[Dejavue DEBUG] Audio chunk saved: ${savedPath} (${audioBuffer.length} bytes)`);
+
+    // Run local Whisper transcription
+    return new Promise((resolve) => {
+      // Use full path to whisper binary (pip installs to user's Python bin)
+      const homeDir = require('os').homedir();
+      const whisperPaths = [
+        `${homeDir}/Library/Python/3.9/bin/whisper`,  // macOS pip3 user install
+        `${homeDir}/.local/bin/whisper`,               // Linux pip3 user install
+        'whisper',                                      // fallback: on PATH
+      ];
+
+      // Find the first whisper binary that exists
+      let whisperBin = 'whisper';
+      for (const p of whisperPaths) {
+        if (fs.existsSync(p)) {
+          whisperBin = p;
+          console.log(`[Dejavue DEBUG] Found whisper at: ${p}`);
+          break;
+        }
+      }
+
+      const whisperCmd = `"${whisperBin}" "${webmPath}" --model base --output_format txt --output_dir "${tmpDir}" --language en 2>&1`;
+      console.log(`[Dejavue DEBUG] Running Whisper command: ${whisperCmd}`);
+
+      // Include the Python bin dir in PATH so whisper can find ffmpeg
+      const pythonBinDir = path.dirname(whisperBin);
+      const env = { ...process.env, PATH: `${pythonBinDir}:${process.env.PATH}` };
+
+      exec(whisperCmd, { timeout: 120000, env }, (error, stdout, stderr) => {
+        console.log(`[Dejavue DEBUG] Whisper exec done. error: ${error?.message || 'none'}`);
+        console.log(`[Dejavue DEBUG] Whisper stdout: ${(stdout || '').substring(0, 500)}`);
+        if (stderr) console.log(`[Dejavue DEBUG] Whisper stderr: ${(stderr || '').substring(0, 500)}`);
+
+        // Read the output .txt file
+        const txtPath = webmPath.replace('.webm', '.txt');
+        console.log(`[Dejavue DEBUG] Looking for output at: ${txtPath}, exists: ${fs.existsSync(txtPath)}`);
+
+        if (fs.existsSync(txtPath)) {
+          const text = fs.readFileSync(txtPath, 'utf-8').trim();
+          console.log(`[Dejavue DEBUG] Whisper transcript (${text.length} chars): "${text.substring(0, 200)}"`);
+
+          // Cleanup temp files
+          try { fs.unlinkSync(webmPath); } catch { }
+          try { fs.unlinkSync(txtPath); } catch { }
+
+          resolve({ success: true, text });
+        } else {
+          console.error(`[Dejavue DEBUG] Whisper output file NOT found at ${txtPath}`);
+          // List what IS in the temp dir
+          try {
+            const files = fs.readdirSync(tmpDir);
+            console.log(`[Dejavue DEBUG] Files in tmpDir: ${files.join(', ')}`);
+          } catch { }
+          // Cleanup
+          try { fs.unlinkSync(webmPath); } catch { }
+          resolve({ success: false, text: '', error: (error?.message || stdout || stderr || 'Whisper output not found') });
+        }
+      });
+    });
+  } catch (err) {
+    console.error('[Dejavue DEBUG] Error in transcription:', err);
+    return { success: false, text: '', error: err.message };
+  }
+});
+
+ipcMain.handle('audio:get-recordings-path', () => {
+  return path.join(app.getPath('userData'), 'recordings');
+});
+
+// Save meeting summary as .txt
+ipcMain.handle('summary:save', async (_event, meetingId, summaryText, meetingTitle) => {
+  try {
+    const summariesDir = path.join(app.getPath('userData'), 'summaries');
+    fs.mkdirSync(summariesDir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeTitle = (meetingTitle || 'meeting').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
+    const fileName = `${safeTitle}_${timestamp}.txt`;
+    const filePath = path.join(summariesDir, fileName);
+
+    const fullContent = `Meeting Summary - ${meetingTitle || 'Untitled Meeting'}
+Generated: ${new Date().toLocaleString()}
+Meeting ID: ${meetingId}
+${'='.repeat(60)}
+
+${summaryText}
+`;
+
+    fs.writeFileSync(filePath, fullContent, 'utf-8');
+    console.log(`[Dejavue] Summary saved: ${filePath}`);
+    return { success: true, filePath };
+  } catch (err) {
+    console.error('[Dejavue] Error saving summary:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+// Desktop capturer for system audio
+ipcMain.handle('desktop-capturer:get-sources', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      fetchWindowIcons: false,
+    });
+    return sources.map(s => ({ id: s.id, name: s.name }));
+  } catch (err) {
+    console.error('[Dejavue] Error getting desktop sources:', err);
+    return [];
+  }
+});
+
 ipcMain.handle('permissions:reset', () => {
   if (fs.existsSync(PERM_FILE)) fs.unlinkSync(PERM_FILE);
   return true;
@@ -446,16 +583,24 @@ ipcMain.handle('permissions:reset', () => {
 // App Lifecycle
 // ──────────────────────────────────────────────
 app.on('ready', () => {
+  // Auto-grant mic/camera permissions for the chatbot window
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    const allowedPermissions = ['media', 'microphone', 'audioCapture'];
+    if (allowedPermissions.includes(permission)) {
+      console.log(`[Dejavue] Auto-granting permission: ${permission}`);
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
+
   createWindow();
 
   // Auto-start monitoring if permission was previously granted
-  // Delay slightly to let the window finish loading
   const perm = isPermissionValid();
   if (perm === true) {
     setTimeout(() => startMonitoring(), 2000);
   }
-  // If perm is null (never asked or expired), the renderer will show the prompt
-  // If perm is false (denied), don't start monitoring
 });
 
 app.on('window-all-closed', () => {

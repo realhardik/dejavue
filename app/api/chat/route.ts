@@ -1,4 +1,5 @@
-import { streamText, convertToModelMessages } from 'ai'
+import { streamText } from 'ai'
+import { google } from '@ai-sdk/google'
 
 export async function POST(req: Request) {
   try {
@@ -9,22 +10,23 @@ export async function POST(req: Request) {
     }
 
     const result = streamText({
-      model: 'openai/gpt-4o-mini',
-      system: `You are Dejavue's AI assistant, specialized in helping users analyze and understand their meetings. 
-      You have access to meeting transcripts, summaries, and participant information.
-      You should:
-      - Provide clear, concise answers about meeting content
-      - Help identify action items and decisions
-      - Offer insights about meeting dynamics and key topics
-      - Answer questions about specific moments in the meeting
-      - Help with meeting follow-ups and action tracking
-      Be conversational, helpful, and context-aware.`,
-      messages: await convertToModelMessages(messages),
+      model: google('gemini-2.0-flash'),
+      system: `You are Dejavue's AI meeting assistant. You have access to the live meeting transcript provided in the conversation.
+
+Your capabilities:
+- Answer questions about what's being discussed in the meeting
+- Identify key decisions, action items, and important points
+- Clarify what was said by specific participants
+- Summarize sections of the meeting on demand
+- Track topics and themes as they emerge
+
+Be concise, helpful, and context-aware. Reference specific parts of the transcript when answering.`,
+      messages,
     })
 
-    return result.toUIMessageStreamResponse()
+    return result.toDataStreamResponse()
   } catch (error) {
-    console.error('[v0] Chat API error:', error)
+    console.error('[Chat API] Error:', error)
     return new Response('Internal server error', { status: 500 })
   }
 }

@@ -12,8 +12,10 @@
     "electron": "electron ."
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.24",
     "@ai-sdk/react": "^3.0.0",
     "@hookform/resolvers": "^3.9.1",
+    "@huggingface/inference": "^4.13.12",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",
     "@radix-ui/react-aspect-ratio": "1.1.1",

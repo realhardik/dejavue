@@ -35,6 +35,7 @@ export function PermissionPrompt({ onGrant, onDeny }: PermissionPromptProps) {
                     <ul className="text-xs text-muted-foreground space-y-1">
                         <li>• Running applications (to detect Zoom)</li>
                         <li>• Browser tab titles (to detect Google Meet)</li>
+                        <li>• 🎙️ Microphone (for meeting recording & transcription)</li>
                     </ul>
                 </div>
 

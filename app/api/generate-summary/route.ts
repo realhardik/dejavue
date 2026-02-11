@@ -1,54 +1,47 @@
-import { generateText, Output } from 'ai'
-import { z } from 'zod'
+import { generateText } from 'ai'
+import { google } from '@ai-sdk/google'
 
 export async function POST(req: Request) {
-  const { meetingTranscript, meetingTitle } = await req.json()
+  try {
+    const { meetingTranscript, meetingTitle } = await req.json()
 
-  const result = await generateText({
-    model: 'openai/gpt-4o-mini',
-    system: `You are an expert meeting analyst. Generate comprehensive meeting minutes and summaries.
-    Focus on:
-    - Key decisions made
-    - Action items with owners
-    - Main topics discussed
-    - Next steps
-    Keep summaries concise but complete.`,
-    prompt: `Please analyze this meeting transcript and provide:
-1. Executive Summary (2-3 sentences)
-2. Key Decisions (bullet points)
-3. Action Items (with owners if mentioned)
-4. Next Meeting Date (if discussed)
-5. Participants Summary
+    if (!meetingTranscript) {
+      return Response.json({ error: 'No transcript provided' }, { status: 400 })
+    }
 
-Meeting Title: ${meetingTitle}
+    const result = await generateText({
+      model: google('gemini-2.0-flash'),
+      system: `You are an expert meeting analyst. Generate comprehensive, well-formatted meeting minutes.
+Focus on accuracy and actionable outcomes. Format your response as clean, readable text.`,
+      prompt: `Analyze this meeting transcript and generate a complete summary:
+
+Meeting Title: ${meetingTitle || 'Untitled Meeting'}
+Date: ${new Date().toLocaleDateString()}
 
 Transcript:
-${meetingTranscript}`,
-    output: Output.object({
-      schema: z.object({
-        executiveSummary: z.string().describe('Brief summary of the meeting'),
-        keyDecisions: z
-          .array(z.string())
-          .describe('Key decisions made during the meeting'),
-        actionItems: z
-          .array(
-            z.object({
-              task: z.string(),
-              owner: z.string().nullable(),
-              dueDate: z.string().nullable(),
-            })
-          )
-          .describe('Action items from the meeting'),
-        nextMeetingDate: z.string().nullable().describe('Next meeting date if discussed'),
-        topicsDiscussed: z
-          .array(z.string())
-          .describe('Main topics covered in the meeting'),
-        participants: z
-          .array(z.string())
-          .describe('Names of participants'),
-      }),
-    }),
-  })
+${meetingTranscript}
 
-  return Response.json(result.object)
+Please provide:
+
+1. EXECUTIVE SUMMARY
+   A brief 2-3 sentence overview of the meeting.
+
+2. KEY DECISIONS
+   List all decisions made during the meeting.
+
+3. ACTION ITEMS
+   List each action item with the responsible person (if mentioned).
+
+4. TOPICS DISCUSSED
+   Main topics covered during the meeting.
+
+5. NEXT STEPS
+   Any follow-up items or next meeting plans discussed.`,
+    })
+
+    return Response.json({ summary: result.text })
+  } catch (error) {
+    console.error('[Summary API] Error:', error)
+    return Response.json({ error: 'Failed to generate summary' }, { status: 500 })
+  }
 }
