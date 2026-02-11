@@ -1,68 +1,60 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { Sidebar } from '@/components/sidebar'
 import { MeetingCard } from '@/components/meeting-card'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Search, Filter } from 'lucide-react'
+import { Search, Filter, Loader2 } from 'lucide-react'
+
+interface Meeting {
+  _id: string
+  title: string
+  platform: string
+  status: string
+  createdAt: string
+  endedAt: string | null
+  durationMs: number | null
+  summary: string | null
+}
+
+function formatDuration(ms: number | null): string {
+  if (!ms) return '—'
+  const totalMin = Math.round(ms / 60000)
+  const hours = Math.floor(totalMin / 60)
+  const minutes = totalMin % 60
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function formatDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  })
+}
 
 export default function MeetingsPage() {
-  const allMeetings = [
-    {
-      id: '1',
-      title: 'Product Planning Sprint',
-      date: 'Feb 8, 2024',
-      duration: '1h 45m',
-      participants: 8,
-      status: 'completed' as const,
-      summary: 'Q1 roadmap discussion and feature prioritization',
-    },
-    {
-      id: '2',
-      title: 'Engineering Standup',
-      date: 'Feb 8, 2024',
-      duration: '25m',
-      participants: 5,
-      status: 'completed' as const,
-      summary: 'Sprint updates and blocker review',
-    },
-    {
-      id: '3',
-      title: 'Client Presentation',
-      date: 'Feb 9, 2024',
-      duration: '1h',
-      participants: 12,
-      status: 'scheduled' as const,
-    },
-    {
-      id: '4',
-      title: 'Design Review',
-      date: 'Feb 7, 2024',
-      duration: '50m',
-      participants: 6,
-      status: 'completed' as const,
-      summary: 'New dashboard UI components reviewed and approved',
-    },
-    {
-      id: '5',
-      title: 'Board Meeting',
-      date: 'Feb 6, 2024',
-      duration: '2h 30m',
-      participants: 10,
-      status: 'completed' as const,
-      summary: 'Q4 financial review and strategic planning',
-    },
-    {
-      id: '6',
-      title: 'Team Retrospective',
-      date: 'Feb 5, 2024',
-      duration: '1h 15m',
-      participants: 8,
-      status: 'completed' as const,
-      summary: 'Sprint retrospective and action items for next sprint',
-    },
-  ]
+  const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  useEffect(() => {
+    const user = localStorage.getItem('user')
+    const userId = user ? JSON.parse(user).id : null
+
+    fetch(`/api/meetings${userId ? `?userId=${userId}` : ''}`)
+      .then(res => res.json())
+      .then(data => {
+        setMeetings(data.meetings || [])
+        setIsLoading(false)
+      })
+      .catch(() => setIsLoading(false))
+  }, [])
+
+  const filteredMeetings = meetings.filter(m =>
+    m.title.toLowerCase().includes(searchQuery.toLowerCase())
+  )
 
   return (
     <div className="h-screen bg-background">
@@ -81,6 +73,8 @@ export default function MeetingsPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none" />
               <Input
                 placeholder="Search meetings..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-10 bg-secondary border-border/50 text-foreground placeholder:text-muted-foreground"
               />
             </div>
@@ -93,27 +87,36 @@ export default function MeetingsPage() {
 
         {/* Content */}
         <main className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {allMeetings.map((meeting) => (
-              <MeetingCard
-                key={meeting.id}
-                id={meeting.id}
-                title={meeting.title}
-                date={meeting.date}
-                duration={meeting.duration}
-                participants={meeting.participants}
-                status={meeting.status}
-                summary={meeting.summary}
-              />
-            ))}
-          </div>
-
-          {/* Empty State */}
-          <div className="text-center py-12">
-            <Card className="p-12 border-border/50 text-center">
-              <p className="text-muted-foreground">No more meetings to display</p>
-            </Card>
-          </div>
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center py-20">
+              <Loader2 className="w-8 h-8 text-primary animate-spin mb-3" />
+              <p className="text-muted-foreground">Loading meetings...</p>
+            </div>
+          ) : filteredMeetings.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredMeetings.map((meeting) => (
+                <MeetingCard
+                  key={meeting._id}
+                  id={meeting._id}
+                  title={meeting.title}
+                  date={formatDate(meeting.createdAt)}
+                  duration={formatDuration(meeting.durationMs)}
+                  participants={1}
+                  status={meeting.status === 'completed' ? 'completed' : meeting.status === 'active' ? 'ongoing' : 'scheduled'}
+                  summary={meeting.summary || undefined}
+                  platform={meeting.platform}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12">
+              <Card className="p-12 border-border/50 text-center">
+                <p className="text-muted-foreground">
+                  {searchQuery ? 'No meetings match your search' : 'No meetings yet. Start one from the dashboard!'}
+                </p>
+              </Card>
+            </div>
+          )}
         </main>
       </div>
     </div>

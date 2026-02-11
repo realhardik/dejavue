@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import clientPromise from '@/lib/mongodb'
-import { ObjectId } from 'mongodb'
 
-// GET - list all meetings
-export async function GET() {
+// GET - list meetings for a user
+export async function GET(request: NextRequest) {
     try {
+        const { searchParams } = new URL(request.url)
+        const userId = searchParams.get('userId')
+
         const client = await clientPromise
         const db = client.db('dejavue')
+
+        const query: Record<string, unknown> = {}
+        if (userId) query.userId = userId
+
         const meetings = await db
             .collection('meetings')
-            .find({})
+            .find(query)
             .sort({ createdAt: -1 })
             .limit(50)
             .toArray()
@@ -25,7 +31,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json()
-        const { title, platform, status } = body
+        const { userId, meetingId, title, platform } = body
 
         if (!title || !platform) {
             return NextResponse.json(
@@ -38,12 +44,17 @@ export async function POST(request: NextRequest) {
         const db = client.db('dejavue')
 
         const meeting = {
+            userId: userId || null,
+            meetingId: meetingId || null,
             title,
             platform,
-            status: status || 'active',
+            status: 'active',
             createdAt: new Date(),
             endedAt: null,
-            duration: null,
+            durationMs: null,
+            transcript: [],
+            summary: null,
+            summaryFilePath: null,
         }
 
         const result = await db.collection('meetings').insertOne(meeting)

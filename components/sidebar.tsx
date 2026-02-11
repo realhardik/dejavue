@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,24 @@ import { Video, Settings, LogOut, BarChart3, MessageSquare, History } from 'luci
 export function Sidebar() {
   const pathname = usePathname()
   const [isExpanded, setIsExpanded] = useState(false)
+  const [userName, setUserName] = useState('')
+  const [userEmail, setUserEmail] = useState('')
+
+  useEffect(() => {
+    const user = localStorage.getItem('user')
+    if (user) {
+      const parsed = JSON.parse(user)
+      setUserName(parsed.name || '')
+      setUserEmail(parsed.email || '')
+    }
+  }, [])
+
+  const initials = userName
+    .split(' ')
+    .map(n => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2) || '?'
 
   const menuItems = [
     { href: '/dashboard', icon: Video, label: 'Dashboard', key: 'dashboard' },
@@ -64,6 +82,24 @@ export function Sidebar() {
           )
         })}
       </nav>
+
+      {/* User Profile */}
+      <div className="px-4 mb-3">
+        <div className="flex items-center h-12">
+          <div className="w-12 h-12 flex items-center justify-center flex-shrink-0">
+            <div className="w-9 h-9 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
+              <span className="text-xs font-bold text-primary">{initials}</span>
+            </div>
+          </div>
+          <div className={cn(
+            "ml-1 overflow-hidden transition-opacity duration-300 ease-in-out min-w-0",
+            isExpanded ? "opacity-100" : "opacity-0"
+          )}>
+            <p className="text-sm font-medium text-foreground truncate">{userName}</p>
+            <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
+          </div>
+        </div>
+      </div>
 
       {/* Bottom: Settings & Logout */}
       <div className="border-t border-border/30 pt-4 space-y-2 px-4">

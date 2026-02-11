@@ -450,19 +450,13 @@ ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer)
   const tmpDir = path.join(os.tmpdir(), 'dejavue-audio');
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  // Also save to recordings directory
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings', meetingId);
-  fs.mkdirSync(recordingsDir, { recursive: true });
-
   const webmPath = path.join(tmpDir, `chunk_${meetingId}_${chunkIndex}.webm`);
-  const savedPath = path.join(recordingsDir, `chunk_${chunkIndex}.webm`);
 
   try {
-    // Save the audio buffer
+    // Save audio buffer to temp (deleted after Whisper processes it)
     const audioBuffer = Buffer.from(buffer);
     fs.writeFileSync(webmPath, audioBuffer);
-    fs.writeFileSync(savedPath, audioBuffer);
-    console.log(`[Dejavue DEBUG] Audio chunk saved: ${savedPath} (${audioBuffer.length} bytes)`);
+    console.log(`[Dejavue DEBUG] Audio chunk temp saved: ${webmPath} (${audioBuffer.length} bytes)`);
 
     // Run local Whisper transcription
     return new Promise((resolve) => {

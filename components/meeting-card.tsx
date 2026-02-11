@@ -1,7 +1,8 @@
+import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Calendar, Clock, Users, FileText } from 'lucide-react'
+import { Calendar, Clock, FileText } from 'lucide-react'
 
 interface MeetingCardProps {
   id: string
@@ -12,15 +13,17 @@ interface MeetingCardProps {
   status: 'completed' | 'ongoing' | 'scheduled'
   summary?: string
   transcription?: string
+  platform?: string
 }
 
 export function MeetingCard({
+  id,
   title,
   date,
   duration,
-  participants,
   status,
   summary,
+  platform,
 }: MeetingCardProps) {
   const statusConfig = {
     completed: { bg: 'bg-green-500/10', text: 'text-green-400', label: 'Completed' },
@@ -37,7 +40,14 @@ export function MeetingCard({
           <h3 className="text-lg font-semibold text-foreground mb-1 group-hover:text-primary transition-colors">
             {title}
           </h3>
-          <Badge className={`${config.bg} ${config.text} border-0`}>{config.label}</Badge>
+          <div className="flex items-center gap-1 flex-wrap">
+            <Badge className={`${config.bg} ${config.text} border-0`}>{config.label}</Badge>
+            {platform && (
+              <Badge className="bg-secondary/50 text-muted-foreground border-0 text-xs">
+                {platform === 'google-meet' ? '📹 Meet' : platform === 'zoom' ? '🎥 Zoom' : '📞'}
+              </Badge>
+            )}
+          </div>
         </div>
       </div>
 
@@ -50,13 +60,9 @@ export function MeetingCard({
           <Clock className="w-4 h-4" />
           <span>{duration}</span>
         </div>
-        <div className="flex items-center gap-2">
-          <Users className="w-4 h-4" />
-          <span>{participants} participants</span>
-        </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 col-span-2">
           <FileText className="w-4 h-4" />
-          <span>Summary ready</span>
+          <span>{summary ? 'Summary ready' : 'No summary'}</span>
         </div>
       </div>
 
@@ -66,12 +72,11 @@ export function MeetingCard({
         </div>
       )}
 
-      <div className="flex gap-2">
-        <Button variant="outline" className="flex-1 border-border/50 text-foreground hover:bg-secondary bg-transparent">
+      <Link href={`/dashboard/meeting/${id}`}>
+        <Button variant="outline" className="w-full border-border/50 text-foreground hover:bg-secondary bg-transparent">
           View Details
         </Button>
-        <Button className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground">Chat with AI</Button>
-      </div>
+      </Link>
     </Card>
   )
 }

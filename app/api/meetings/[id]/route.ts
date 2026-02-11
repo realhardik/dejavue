@@ -29,6 +29,50 @@ export async function GET(
     }
 }
 
+// PATCH - update meeting (transcript, summary, end meeting)
+export async function PATCH(
+    request: NextRequest,
+    { params }: { params: Promise<{ id: string }> }
+) {
+    try {
+        const { id } = await params
+
+        if (!ObjectId.isValid(id)) {
+            return NextResponse.json({ error: 'Invalid meeting ID' }, { status: 400 })
+        }
+
+        const body = await request.json()
+        const updateFields: Record<string, unknown> = {}
+
+        if (body.transcript !== undefined) updateFields.transcript = body.transcript
+        if (body.summary !== undefined) updateFields.summary = body.summary
+        if (body.summaryFilePath !== undefined) updateFields.summaryFilePath = body.summaryFilePath
+        if (body.status !== undefined) updateFields.status = body.status
+        if (body.endedAt !== undefined) updateFields.endedAt = new Date(body.endedAt)
+        if (body.durationMs !== undefined) updateFields.durationMs = body.durationMs
+
+        if (Object.keys(updateFields).length === 0) {
+            return NextResponse.json({ error: 'No fields to update' }, { status: 400 })
+        }
+
+        const client = await clientPromise
+        const db = client.db('dejavue')
+        const result = await db.collection('meetings').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        )
+
+        if (result.matchedCount === 0) {
+            return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
+        }
+
+        return NextResponse.json({ success: true })
+    } catch (error) {
+        console.error('Error updating meeting:', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    }
+}
+
 // DELETE - delete a meeting
 export async function DELETE(
     request: NextRequest,

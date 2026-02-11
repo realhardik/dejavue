@@ -45,6 +45,8 @@ function AIChatContent() {
     const streamRef = useRef<MediaStream | null>(null)
     const meetingEndedRef = useRef(false)
     const isTranscribingRef = useRef(false)
+    const dbMeetingIdRef = useRef<string | null>(null)
+    const meetingStartTimeRef = useRef<Date>(new Date())
 
     const platformInfo: Record<string, { icon: string; color: string; label: string }> = {
         zoom: { icon: '🎥', color: 'text-blue-400', label: 'Zoom' },
@@ -244,12 +246,58 @@ function AIChatContent() {
         console.log('[Recording] Stopped')
     }, [])
 
+    // ─── Save meeting to DB ──────────────────
+    const saveMeetingToDB = useCallback(async () => {
+        try {
+            const user = localStorage.getItem('user')
+            const userId = user ? JSON.parse(user).id : null
+            const response = await fetch('/api/meetings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, meetingId, title, platform }),
+            })
+            if (response.ok) {
+                const data = await response.json()
+                dbMeetingIdRef.current = data.meeting._id
+                console.log('[DB] Meeting saved:', data.meeting._id)
+            }
+        } catch (err) {
+            console.error('[DB] Error saving meeting:', err)
+        }
+    }, [meetingId, title, platform])
+
+    const updateMeetingInDB = useCallback(async (transcriptData: TranscriptChunk[], summaryText: string | null, filePath: string | null) => {
+        if (!dbMeetingIdRef.current) return
+        try {
+            const endedAt = new Date()
+            const durationMs = endedAt.getTime() - meetingStartTimeRef.current.getTime()
+            await fetch(`/api/meetings/${dbMeetingIdRef.current}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    status: 'completed',
+                    endedAt: endedAt.toISOString(),
+                    durationMs,
+                    transcript: transcriptData,
+                    summary: summaryText,
+                    summaryFilePath: filePath,
+                }),
+            })
+            console.log('[DB] Meeting updated with transcript + summary')
+        } catch (err) {
+            console.error('[DB] Error updating meeting:', err)
+        }
+    }, [])
+
     // ─── Summary Generation (Gemini) ─────────
     const generateSummary = useCallback(async () => {
         const fullTranscript = transcript.map(c => `[${c.timestamp}] ${c.text}`).join('\n')
         if (!fullTranscript.trim()) return
 
         setIsGeneratingSummary(true)
+        let savedFilePath: string | null = null
+        let generatedSummary: string | null = null
+
         try {
             const response = await fetch('/api/generate-summary', {
                 method: 'POST',
@@ -262,13 +310,15 @@ function AIChatContent() {
 
             if (response.ok) {
                 const data = await response.json()
+                generatedSummary = data.summary
                 setSummary(data.summary)
 
                 // Save as .txt via Electron IPC
                 if (typeof window !== 'undefined' && window.electronAPI?.saveSummary) {
                     const result = await window.electronAPI.saveSummary(meetingId, data.summary, title)
                     if (result.success) {
-                        setSummaryFilePath(result.filePath || null)
+                        savedFilePath = result.filePath || null
+                        setSummaryFilePath(savedFilePath)
                         console.log(`[Summary] Saved to: ${result.filePath}`)
                     }
                 }
@@ -277,8 +327,10 @@ function AIChatContent() {
             console.error('[Summary] Error:', err)
         } finally {
             setIsGeneratingSummary(false)
+            // Update meeting in DB with transcript + summary
+            await updateMeetingInDB(transcript, generatedSummary, savedFilePath)
         }
-    }, [transcript, title, meetingId])
+    }, [transcript, title, meetingId, updateMeetingInDB])
 
     // ─── Chat (Q&A with Gemini + transcript) ──
     const sendMessage = useCallback(async () => {
@@ -333,11 +385,13 @@ function AIChatContent() {
         }
     }, [chatInput, isSending, transcript, title, info.label])
 
+
     // ─── Effects ─────────────────────────────
     useEffect(() => {
+        saveMeetingToDB()
         const timer = setTimeout(() => startRecording(), 1500)
         return () => clearTimeout(timer)
-    }, [startRecording])
+    }, [startRecording, saveMeetingToDB])
 
     useEffect(() => {
         if (typeof window !== 'undefined' && window.electronAPI?.onMeetingEnded) {

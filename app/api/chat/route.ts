@@ -3,24 +3,33 @@ import { google } from '@ai-sdk/google'
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json()
+    const { messages, meetingContext } = await req.json()
 
     if (!messages || !Array.isArray(messages)) {
       return new Response('Invalid messages format', { status: 400 })
     }
 
-    const result = streamText({
-      model: google('gemini-2.0-flash'),
-      system: `You are Dejavue's AI meeting assistant. You have access to the live meeting transcript provided in the conversation.
+    // Build system prompt — inject meeting M.o.M if provided
+    let systemPrompt = `You are Dejavue's AI meeting assistant.
 
 Your capabilities:
-- Answer questions about what's being discussed in the meeting
-- Identify key decisions, action items, and important points
-- Clarify what was said by specific participants
-- Summarize sections of the meeting on demand
-- Track topics and themes as they emerge
+- Answer questions about meetings
+- Summarize key points and action items
+- Help with follow-ups and meeting preparation`
 
-Be concise, helpful, and context-aware. Reference specific parts of the transcript when answering.`,
+    if (meetingContext) {
+      systemPrompt += `
+
+You have access to the following Minutes of Meeting (M.o.M). Use this context to answer the user's questions accurately:
+
+--- MINUTES OF MEETING ---
+${meetingContext}
+--- END ---`
+    }
+
+    const result = streamText({
+      model: google('gemini-2.0-flash'),
+      system: systemPrompt,
       messages,
     })
 

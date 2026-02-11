@@ -7,12 +7,20 @@ import { Sidebar } from '@/components/sidebar'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { PermissionPrompt, PermissionDeniedPopup } from '@/components/permission-prompt'
-import { Video, MessageSquare, BarChart3, Settings, Clock, Users, Play, Eye } from 'lucide-react'
+import { Video, MessageSquare, BarChart3, Settings, Clock, Users, Play, Eye, Loader2 } from 'lucide-react'
+
+interface AnalyticsData {
+  todayCount: number
+  todayDuration: string
+  recentActivity: { title: string; date: string; time: string; platform: string }[]
+}
 
 export default function DashboardPage() {
   const router = useRouter()
   const [userName, setUserName] = useState('')
   const [showDetecting, setShowDetecting] = useState(false)
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
+  const [isLoadingStats, setIsLoadingStats] = useState(true)
 
   // Permission state
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false)
@@ -27,6 +35,15 @@ export default function DashboardPage() {
     } else {
       const userData = JSON.parse(user)
       setUserName(userData.name || userData.email)
+
+      // Fetch real analytics
+      fetch(`/api/analytics?userId=${userData.id}`)
+        .then(res => res.json())
+        .then(data => {
+          setAnalytics(data)
+          setIsLoadingStats(false)
+        })
+        .catch(() => setIsLoadingStats(false))
     }
   }, [router])
 
@@ -189,45 +206,46 @@ export default function DashboardPage() {
                     <Eye className="w-5 h-5 text-primary" />
                     Today&apos;s Insights
                   </h3>
-                  <div className="space-y-4">
-                    <div className="p-3 rounded-lg bg-secondary/50 border border-border/30">
-                      <p className="text-xs text-muted-foreground mb-1">Meetings Today</p>
-                      <p className="text-2xl font-bold text-foreground">3</p>
+                  {isLoadingStats ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="w-6 h-6 text-primary animate-spin" />
                     </div>
-                    <div className="p-3 rounded-lg bg-secondary/50 border border-border/30">
-                      <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        Total Duration
-                      </p>
-                      <p className="text-2xl font-bold text-foreground">4h 50m</p>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="p-3 rounded-lg bg-secondary/50 border border-border/30">
+                        <p className="text-xs text-muted-foreground mb-1">Meetings Today</p>
+                        <p className="text-2xl font-bold text-foreground">{analytics?.todayCount || 0}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-secondary/50 border border-border/30">
+                        <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          Total Duration
+                        </p>
+                        <p className="text-2xl font-bold text-foreground">{analytics?.todayDuration || '0m'}</p>
+                      </div>
                     </div>
-                    <div className="p-3 rounded-lg bg-secondary/50 border border-border/30">
-                      <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-                        <Users className="w-3 h-3" />
-                        Total Participants
-                      </p>
-                      <p className="text-2xl font-bold text-foreground">25</p>
-                    </div>
-                  </div>
+                  )}
                 </Card>
 
                 {/* Recent Activity */}
                 <Card className="p-6 border-border/50">
                   <h3 className="font-semibold text-foreground mb-4">Recent Activity</h3>
-                  <div className="space-y-3">
-                    <div className="pb-3 border-b border-border/30">
-                      <p className="text-xs text-muted-foreground">Product Planning Sprint</p>
-                      <p className="text-sm text-foreground">Today 2:30 PM</p>
+                  {isLoadingStats ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="w-6 h-6 text-primary animate-spin" />
                     </div>
-                    <div className="pb-3 border-b border-border/30">
-                      <p className="text-xs text-muted-foreground">Engineering Standup</p>
-                      <p className="text-sm text-foreground">Today 10:00 AM</p>
+                  ) : analytics?.recentActivity && analytics.recentActivity.length > 0 ? (
+                    <div className="space-y-3">
+                      {analytics.recentActivity.slice(0, 3).map((activity, i) => (
+                        <div key={i} className={i < 2 ? 'pb-3 border-b border-border/30' : ''}>
+                          <p className="text-xs text-muted-foreground">{activity.title}</p>
+                          <p className="text-sm text-foreground">{activity.date} · {activity.time}</p>
+                        </div>
+                      ))}
                     </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Client Presentation</p>
-                      <p className="text-sm text-foreground">Tomorrow 1:00 PM</p>
-                    </div>
-                  </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground text-center py-4">No meetings yet. Start one!</p>
+                  )}
                 </Card>
 
                 {/* Quick Tip */}

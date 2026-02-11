@@ -1,81 +1,150 @@
 'use client'
 
+import { useEffect, useState, use } from 'react'
 import { Sidebar } from '@/components/sidebar'
-import { MeetingSummary } from '@/components/meeting-summary'
 import { ChatInterface } from '@/components/chat-interface'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { ArrowLeft, FileText, MessageSquare } from 'lucide-react'
+import { ArrowLeft, FileText, MessageSquare, Download, Clock, Calendar, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 
-export default function MeetingDetailPage({ params }: { params: { id: string } }) {
-  // Mock data - in production, this would be fetched based on the meeting ID
-  const mockMeetingData = {
-    title: 'Product Planning Sprint',
-    date: 'February 8, 2024 at 2:30 PM',
-    duration: '1h 45m',
-    participants: ['Sarah Johnson', 'Mark Chen', 'Alex Rivera', 'Jordan Lee', 'Casey Williams'],
-    status: 'completed' as const,
-    executiveSummary:
-      'The team met to discuss the Q1 product roadmap. The primary focus was on prioritizing three major initiatives: dashboard redesign, API performance optimization, and mobile app enhancement. The team agreed to start with the dashboard redesign as the top priority due to recent user feedback.',
-    keyDecisions: [
-      'Dashboard redesign approved as the top priority for Q1',
-      'API performance optimization to be scheduled for Q2',
-      'Mobile app enhancement approved with a focus on iOS first',
-      'Weekly sync meetings scheduled for the team starting next Monday',
-    ],
-    actionItems: [
-      {
-        task: 'Create detailed dashboard redesign specification',
-        owner: 'Sarah Johnson',
-        dueDate: 'Feb 15, 2024',
-      },
-      {
-        task: 'Gather UI/UX requirements from customer research',
-        owner: 'Mark Chen',
-        dueDate: 'Feb 15, 2024',
-      },
-      {
-        task: 'Setup development environment for dashboard project',
-        owner: 'Alex Rivera',
-        dueDate: 'Feb 12, 2024',
-      },
-      {
-        task: 'Schedule Q2 planning meeting',
-        owner: 'Jordan Lee',
-        dueDate: 'Feb 20, 2024',
-      },
-    ],
-    topicsDiscussed: [
-      'Q1 product roadmap',
-      'User feedback analysis',
-      'Dashboard redesign plans',
-      'Performance optimization',
-      'Mobile app strategy',
-      'Team capacity planning',
-      'Timeline and milestones',
-    ],
-    nextMeetingDate: 'February 15, 2024 at 2:00 PM',
-    transcription: `Sarah Johnson: Let me start by reviewing the product roadmap for Q1. We have three major initiatives planned.
+interface MeetingData {
+  _id: string
+  title: string
+  platform: string
+  status: string
+  createdAt: string
+  endedAt: string | null
+  durationMs: number | null
+  transcript: { index: number; text: string; timestamp: string }[]
+  summary: string | null
+  summaryFilePath: string | null
+}
 
-Mark Chen: Great, I looked at the initial priorities and I think we should focus on the dashboard redesign first.
+function formatDuration(ms: number | null): string {
+  if (!ms) return '—'
+  const totalMin = Math.round(ms / 60000)
+  const hours = Math.floor(totalMin / 60)
+  const minutes = totalMin % 60
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
 
-Sarah Johnson: Good point. The dashboard redesign aligns with our user feedback from last quarter.
+function formatDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-IN', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
+}
 
-Alex Rivera: I agree. We've been getting complaints about the current layout. When can we start?
+function formatTime(dateStr: string): string {
+  return new Date(dateStr).toLocaleTimeString('en-IN', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
 
-Sarah Johnson: I'm thinking we can kick off next week. Let me create a detailed spec by Friday.
+export default function MeetingDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params)
+  const [meeting, setMeeting] = useState<MeetingData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-Jordan Lee: What about the API performance work? Shouldn't that be a priority too?
+  useEffect(() => {
+    fetch(`/api/meetings/${id}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Meeting not found')
+        return res.json()
+      })
+      .then(data => {
+        setMeeting(data.meeting)
+        setIsLoading(false)
+      })
+      .catch(err => {
+        setError(err.message)
+        setIsLoading(false)
+      })
+  }, [id])
 
-Mark Chen: I think that's important but it's less urgent than the UI changes. We could schedule that for Q2.
+  // Build M.o.M text for download and AI context
+  const buildMoM = (): string => {
+    if (!meeting) return ''
+    const lines = [
+      `Minutes of Meeting`,
+      `${'='.repeat(50)}`,
+      `Title: ${meeting.title}`,
+      `Date: ${formatDate(meeting.createdAt)}`,
+      `Time: ${formatTime(meeting.createdAt)}`,
+      `Duration: ${formatDuration(meeting.durationMs)}`,
+      `Platform: ${meeting.platform === 'google-meet' ? 'Google Meet' : meeting.platform === 'zoom' ? 'Zoom' : meeting.platform}`,
+      ``,
+      `${'─'.repeat(50)}`,
+      `SUMMARY`,
+      `${'─'.repeat(50)}`,
+      meeting.summary || 'No summary available.',
+      ``,
+    ]
 
-Casey Williams: I'm concerned about the mobile app though. We have declining iOS adoption.
+    if (meeting.transcript && meeting.transcript.length > 0) {
+      lines.push(`${'─'.repeat(50)}`)
+      lines.push(`TRANSCRIPT`)
+      lines.push(`${'─'.repeat(50)}`)
+      meeting.transcript.forEach(chunk => {
+        lines.push(`[${chunk.timestamp}] ${chunk.text}`)
+      })
+    }
 
-Sarah Johnson: You're right. Let's make mobile app enhancement our third priority, focusing on iOS improvements...`,
+    return lines.join('\n')
   }
+
+  const handleDownloadMoM = () => {
+    const content = buildMoM()
+    const blob = new Blob([content], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const safeTitle = (meeting?.title || 'meeting').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
+    a.download = `MoM_${safeTitle}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="h-screen bg-background">
+        <Sidebar />
+        <div className="ml-20 h-full flex items-center justify-center">
+          <Loader2 className="w-8 h-8 text-primary animate-spin" />
+        </div>
+      </div>
+    )
+  }
+
+  if (error || !meeting) {
+    return (
+      <div className="h-screen bg-background">
+        <Sidebar />
+        <div className="ml-20 h-full flex flex-col items-center justify-center">
+          <p className="text-muted-foreground mb-4">{error || 'Meeting not found'}</p>
+          <Link href="/dashboard/meetings">
+            <Button variant="outline" className="gap-2">
+              <ArrowLeft className="w-4 h-4" />
+              Back to Meetings
+            </Button>
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
+  const platformLabel = meeting.platform === 'google-meet' ? '📹 Google Meet' : meeting.platform === 'zoom' ? '🎥 Zoom' : '📞 Meeting'
 
   return (
     <div className="h-screen bg-background">
@@ -85,7 +154,7 @@ Sarah Johnson: You're right. Let's make mobile app enhancement our third priorit
       {/* Main Content */}
       <div className="ml-20 h-full overflow-auto">
         {/* Header */}
-        <header className="border-b border-border/50 p-6 sticky top-0 bg-background/95 backdrop-blur-sm">
+        <header className="border-b border-border/50 p-6 sticky top-0 bg-background/95 backdrop-blur-sm z-10">
           <div className="flex items-center gap-4 mb-4">
             <Link href="/dashboard/meetings">
               <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
@@ -96,22 +165,35 @@ Sarah Johnson: You're right. Let's make mobile app enhancement our third priorit
           </div>
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-foreground">{mockMeetingData.title}</h1>
+              <h1 className="text-3xl font-bold text-foreground">{meeting.title}</h1>
               <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground">
-                <span>{mockMeetingData.date}</span>
+                <span className="flex items-center gap-1">
+                  <Calendar className="w-4 h-4" />
+                  {formatDate(meeting.createdAt)}
+                </span>
                 <span>•</span>
-                <span>{mockMeetingData.duration}</span>
+                <span className="flex items-center gap-1">
+                  <Clock className="w-4 h-4" />
+                  {formatTime(meeting.createdAt)}
+                </span>
                 <span>•</span>
-                <Badge className="bg-green-500/20 text-green-400 border-0">{mockMeetingData.status}</Badge>
+                <span>{formatDuration(meeting.durationMs)}</span>
+                <span>•</span>
+                <Badge className="bg-green-500/20 text-green-400 border-0">{meeting.status}</Badge>
+                <Badge className="bg-secondary/50 text-muted-foreground border-0">{platformLabel}</Badge>
               </div>
             </div>
+            <Button onClick={handleDownloadMoM} className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground">
+              <Download className="w-4 h-4" />
+              Download M.o.M
+            </Button>
           </div>
         </header>
 
         {/* Content */}
         <main className="p-6">
           <Tabs defaultValue="summary" className="w-full">
-            <TabsList className="grid w-full max-w-md grid-cols-3 border-b border-border/50 bg-transparent">
+            <TabsList className="grid w-full max-w-md grid-cols-2 border-b border-border/50 bg-transparent">
               <TabsTrigger
                 value="summary"
                 className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent"
@@ -124,52 +206,50 @@ Sarah Johnson: You're right. Let's make mobile app enhancement our third priorit
                 className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent"
               >
                 <MessageSquare className="w-4 h-4 mr-2" />
-                Chat
-              </TabsTrigger>
-              <TabsTrigger
-                value="transcript"
-                className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent"
-              >
-                <FileText className="w-4 h-4 mr-2" />
-                Transcript
+                Chat with AI
               </TabsTrigger>
             </TabsList>
 
             {/* Summary Tab */}
             <TabsContent value="summary" className="mt-6">
-              <MeetingSummary
-                title={mockMeetingData.title}
-                date={mockMeetingData.date}
-                participants={mockMeetingData.participants}
-                executiveSummary={mockMeetingData.executiveSummary}
-                keyDecisions={mockMeetingData.keyDecisions}
-                topicsDiscussed={mockMeetingData.topicsDiscussed}
-                actionItems={mockMeetingData.actionItems}
-                nextMeetingDate={mockMeetingData.nextMeetingDate}
-              />
+              <Card className="p-6 border-border/50">
+                <div className="flex items-center gap-2 mb-4">
+                  <FileText className="w-5 h-5 text-primary" />
+                  <h2 className="text-lg font-semibold text-foreground">Meeting Summary</h2>
+                </div>
+                {meeting.summary ? (
+                  <div className="text-sm text-foreground/80 leading-relaxed whitespace-pre-wrap">
+                    {meeting.summary}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No summary available for this meeting.</p>
+                )}
+              </Card>
+
+              {/* Transcript section */}
+              {meeting.transcript && meeting.transcript.length > 0 && (
+                <Card className="p-6 border-border/50 mt-6">
+                  <h2 className="text-lg font-semibold text-foreground mb-4">Transcript</h2>
+                  <div className="space-y-2 text-sm text-muted-foreground max-h-96 overflow-y-auto">
+                    {meeting.transcript.map((chunk, i) => (
+                      <div key={i} className="flex gap-3">
+                        <span className="text-xs text-primary/60 min-w-[80px]">{chunk.timestamp}</span>
+                        <span>{chunk.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
             </TabsContent>
 
             {/* Chat Tab */}
             <TabsContent value="chat" className="mt-6">
-              <Card className="h-96 border-border/50 overflow-hidden">
+              <Card className="h-[500px] border-border/50 overflow-hidden">
                 <ChatInterface
-                  meetingTitle={mockMeetingData.title}
-                  meetingId={params.id}
+                  meetingTitle={meeting.title}
+                  meetingId={id}
+                  meetingContext={buildMoM()}
                 />
-              </Card>
-            </TabsContent>
-
-            {/* Transcript Tab */}
-            <TabsContent value="transcript" className="mt-6">
-              <Card className="p-6 border-border/50">
-                <h2 className="text-lg font-semibold text-foreground mb-4">Full Transcript</h2>
-                <div className="space-y-4 text-sm text-muted-foreground leading-relaxed max-h-96 overflow-y-auto">
-                  {mockMeetingData.transcription.split('\n\n').map((paragraph, index) => (
-                    <p key={index} className="whitespace-pre-wrap">
-                      {paragraph}
-                    </p>
-                  ))}
-                </div>
               </Card>
             </TabsContent>
           </Tabs>
