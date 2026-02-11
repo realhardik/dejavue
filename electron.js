@@ -484,7 +484,9 @@ ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer)
         }
       }
 
-      const whisperCmd = `"${whisperBin}" "${webmPath}" --model base --output_format txt --output_dir "${tmpDir}" --language en 2>&1`;
+      // Force Hindi language mode - handles Hinglish (Hindi+English mix) well
+      // Prevents random detection of Urdu/Polish/Japanese etc.
+      const whisperCmd = `"${whisperBin}" "${webmPath}" --model base --output_format txt --output_dir "${tmpDir}" --language hi 2>&1`;
       console.log(`[Dejavue DEBUG] Running Whisper command: ${whisperCmd}`);
 
       // Include the Python bin dir in PATH so whisper can find ffmpeg

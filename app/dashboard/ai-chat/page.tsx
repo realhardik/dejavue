@@ -489,7 +489,7 @@ function AIChatContent() {
                                 <Mic className="w-8 h-8 text-primary/30 mb-3" />
                                 <p className="text-sm text-muted-foreground">
                                     {isRecording
-                                        ? 'Listening... transcript appears every 30s (local Whisper).'
+                                        ? 'Listening... transcript appears every 15s (local Whisper).'
                                         : 'Starting microphone...'}
                                 </p>
                             </div>
@@ -527,7 +527,16 @@ function AIChatContent() {
                                     <p className="text-xs text-muted-foreground/60 mb-1">
                                         {msg.role === 'user' ? 'You' : '✨ Gemini'}
                                     </p>
-                                    <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                    {msg.role === 'assistant' && msg.content === '' && isSending ? (
+                                        <div className="flex items-center gap-1.5 py-1">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+                                            <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                            <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+                                            <span className="text-xs text-muted-foreground/50 ml-2">thinking...</span>
+                                        </div>
+                                    ) : (
+                                        <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                    )}
                                 </div>
                             ))
                         )}

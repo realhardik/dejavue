@@ -24,7 +24,7 @@ Be concise, helpful, and context-aware. Reference specific parts of the transcri
       messages,
     })
 
-    return result.toDataStreamResponse()
+    return result.toTextStreamResponse()
   } catch (error) {
     console.error('[Chat API] Error:', error)
     return new Response('Internal server error', { status: 500 })
