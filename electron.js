@@ -504,6 +504,39 @@ ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer)
           try { fs.unlinkSync(webmPath); } catch { }
           try { fs.unlinkSync(txtPath); } catch { }
 
+          // ── Silence/noise filter ──────────────────────
+          // Whisper hallucinates Devanagari, random phrases, etc. on silence
+          const devanagariChars = (text.match(/[\u0900-\u097F]/g) || []).length;
+          const totalChars = text.replace(/\s/g, '').length;
+          const devanagariRatio = totalChars > 0 ? devanagariChars / totalChars : 0;
+
+          // Filter 1: mostly Devanagari (hallucination) — over 40% Devanagari chars
+          if (devanagariRatio > 0.4) {
+            console.log(`[Dejavue DEBUG] Filtered: too much Devanagari (${(devanagariRatio * 100).toFixed(0)}%), likely hallucination`);
+            resolve({ success: true, text: '' });
+            return;
+          }
+
+          // Filter 2: too short (less than 3 words after cleanup)
+          const words = text.replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 1);
+          if (words.length < 3) {
+            console.log(`[Dejavue DEBUG] Filtered: too few words (${words.length}), likely noise`);
+            resolve({ success: true, text: '' });
+            return;
+          }
+
+          // Filter 3: common Whisper hallucination phrases
+          const hallucinations = [
+            'thank you for watching', 'thanks for watching', 'subscribe',
+            'subs by', 'subtitles by', 'amara.org', 'please subscribe',
+          ];
+          const lower = text.toLowerCase();
+          if (hallucinations.some(h => lower.includes(h))) {
+            console.log(`[Dejavue DEBUG] Filtered: known hallucination phrase`);
+            resolve({ success: true, text: '' });
+            return;
+          }
+
           resolve({ success: true, text });
         } else {
           console.error(`[Dejavue DEBUG] Whisper output file NOT found at ${txtPath}`);

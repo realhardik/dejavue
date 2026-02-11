@@ -373,6 +373,11 @@ function AIChatContent() {
                         return updated
                     })
                 }
+            } else {
+                setChatMessages(prev => [
+                    ...prev,
+                    { role: 'assistant', content: 'Sorry, could not get a response. Please try again.' },
+                ])
             }
         } catch (err) {
             console.error('[Chat] Error:', err)
@@ -581,7 +586,7 @@ function AIChatContent() {
                                     <p className="text-xs text-muted-foreground/60 mb-1">
                                         {msg.role === 'user' ? 'You' : '✨ Gemini'}
                                     </p>
-                                    {msg.role === 'assistant' && msg.content === '' && isSending ? (
+                                    {msg.role === 'assistant' && msg.content === '' && isSending && i === chatMessages.length - 1 ? (
                                         <div className="flex items-center gap-1.5 py-1">
                                             <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
                                             <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />

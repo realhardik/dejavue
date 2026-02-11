@@ -1,13 +1,13 @@
 'use client'
 
-import { useEffect, useState, use } from 'react'
+import { useEffect, useState, useRef, use } from 'react'
 import { Sidebar } from '@/components/sidebar'
 import { ChatInterface } from '@/components/chat-interface'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { ArrowLeft, FileText, MessageSquare, Download, Clock, Calendar, Loader2 } from 'lucide-react'
+import { ArrowLeft, FileText, MessageSquare, Download, Clock, Calendar, Loader2, Pencil, Check, X } from 'lucide-react'
 import Link from 'next/link'
 
 interface MeetingData {
@@ -54,6 +54,9 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
   const [meeting, setMeeting] = useState<MeetingData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+  const titleInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetch(`/api/meetings/${id}`)
@@ -63,6 +66,7 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
       })
       .then(data => {
         setMeeting(data.meeting)
+        setEditTitle(data.meeting.title)
         setIsLoading(false)
       })
       .catch(err => {
@@ -70,6 +74,34 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
         setIsLoading(false)
       })
   }, [id])
+
+  useEffect(() => {
+    if (isEditingTitle) titleInputRef.current?.focus()
+  }, [isEditingTitle])
+
+  const handleSaveTitle = async () => {
+    const newTitle = editTitle.trim()
+    if (!newTitle || !meeting || newTitle === meeting.title) {
+      setEditTitle(meeting?.title || '')
+      setIsEditingTitle(false)
+      return
+    }
+    try {
+      const res = await fetch(`/api/meetings/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      })
+      if (res.ok) {
+        setMeeting(prev => prev ? { ...prev, title: newTitle } : prev)
+      } else {
+        setEditTitle(meeting.title)
+      }
+    } catch {
+      setEditTitle(meeting.title)
+    }
+    setIsEditingTitle(false)
+  }
 
   // Build M.o.M text for download and AI context
   const buildMoM = (): string => {
@@ -148,10 +180,8 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
 
   return (
     <div className="h-screen bg-background">
-      {/* Sidebar */}
       <Sidebar />
 
-      {/* Main Content */}
       <div className="ml-20 h-full overflow-auto">
         {/* Header */}
         <header className="border-b border-border/50 p-6 sticky top-0 bg-background/95 backdrop-blur-sm z-10">
@@ -165,7 +195,45 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
           </div>
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-foreground">{meeting.title}</h1>
+              {isEditingTitle ? (
+                <div className="flex items-center gap-2 mb-1">
+                  <input
+                    ref={titleInputRef}
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveTitle()
+                      if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false) }
+                    }}
+                    className="text-3xl font-bold text-foreground bg-secondary/50 border border-primary/40 rounded px-2 py-1 outline-none focus:border-primary min-w-[300px]"
+                  />
+                  <button
+                    onClick={handleSaveTitle}
+                    className="p-1.5 rounded-md hover:bg-green-500/10 text-green-400 transition-colors"
+                    title="Save"
+                  >
+                    <Check className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => { setEditTitle(meeting.title); setIsEditingTitle(false) }}
+                    className="p-1.5 rounded-md hover:bg-destructive/10 text-destructive transition-colors"
+                    title="Cancel"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 group/title mb-1">
+                  <h1 className="text-3xl font-bold text-foreground">{meeting.title}</h1>
+                  <button
+                    onClick={() => setIsEditingTitle(true)}
+                    className="p-1 rounded-md opacity-0 group-hover/title:opacity-100 hover:bg-secondary/50 text-muted-foreground hover:text-primary transition-all"
+                    title="Edit title"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
               <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1">
                   <Calendar className="w-4 h-4" />

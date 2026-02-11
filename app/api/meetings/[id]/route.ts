@@ -44,6 +44,7 @@ export async function PATCH(
         const body = await request.json()
         const updateFields: Record<string, unknown> = {}
 
+        if (body.title !== undefined) updateFields.title = body.title
         if (body.transcript !== undefined) updateFields.transcript = body.transcript
         if (body.summary !== undefined) updateFields.summary = body.summary
         if (body.summaryFilePath !== undefined) updateFields.summaryFilePath = body.summaryFilePath
