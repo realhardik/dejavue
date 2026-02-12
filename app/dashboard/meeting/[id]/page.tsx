@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, use } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Sidebar } from '@/components/sidebar'
 import { ChatInterface } from '@/components/chat-interface'
 import { Card } from '@/components/ui/card'
@@ -51,6 +52,8 @@ function formatTime(dateStr: string): string {
 
 export default function MeetingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+  const searchParams = useSearchParams()
+  const defaultTab = searchParams.get('tab') === 'chat' ? 'chat' : 'summary'
   const [meeting, setMeeting] = useState<MeetingData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -260,7 +263,7 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
 
         {/* Content */}
         <main className="p-6">
-          <Tabs defaultValue="summary" className="w-full">
+          <Tabs defaultValue={defaultTab} className="w-full">
             <TabsList className="grid w-full max-w-md grid-cols-2 border-b border-border/50 bg-transparent">
               <TabsTrigger
                 value="summary"

@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Calendar, Clock, FileText, Trash2, Pencil } from 'lucide-react'
 
@@ -150,11 +151,19 @@ export function MeetingCard({
         </div>
       )}
 
-      <Link href={`/dashboard/meeting/${id}`}>
-        <Button variant="outline" className="w-full border-border/50 text-foreground hover:bg-secondary bg-transparent">
-          View Details
-        </Button>
-      </Link>
+      <div className="flex gap-2">
+        <Link href={`/dashboard/meeting/${id}`} className="flex-1">
+          <Button variant="outline" className="w-full border-border/50 text-foreground hover:bg-secondary bg-transparent">
+            View Details
+          </Button>
+        </Link>
+        <Link href={`/dashboard/meeting/${id}?tab=chat`} className="flex-1">
+          <Button variant="outline" className="w-full gap-1.5 border-border/50 text-foreground hover:bg-primary/10 hover:text-primary hover:border-primary/30 bg-transparent">
+            <MessageSquare className="w-4 h-4" />
+            Chat with AI
+          </Button>
+        </Link>
+      </div>
     </Card>
   )
 }
