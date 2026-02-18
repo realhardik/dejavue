@@ -11,7 +11,7 @@ import { Send, Loader2, Bot } from 'lucide-react'
 interface ChatInterfaceProps {
   meetingId?: string
   meetingTitle?: string
-  meetingContext?: string  // M.o.M text injected as context for AI
+  meetingContext?: string
 }
 
 interface ChatMessage {
@@ -121,8 +121,8 @@ export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatI
             >
               <div
                 className={`max-w-md px-4 py-2 rounded-lg ${message.role === 'user'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-secondary text-foreground border border-border/50'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-secondary text-foreground border border-border/50'
                   }`}
               >
                 <p className="text-sm whitespace-pre-wrap">{message.content}</p>

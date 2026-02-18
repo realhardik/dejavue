@@ -10,7 +10,7 @@ export async function POST(req: Request) {
     }
 
     const result = await generateText({
-      model: google('gemini-2.0-flash'),
+      model: google('gemini-2.5-flash'),
       system: `You are an expert meeting analyst. Generate comprehensive, well-formatted meeting minutes.
 Focus on accuracy and actionable outcomes. Format your response as clean, readable text.`,
       prompt: `Analyze this meeting transcript and generate a complete summary:
