@@ -244,29 +244,36 @@ function OverlayContent() {
         try {
             const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 } })
             streamRef.current = mic
-            const mr = new MediaRecorder(mic, { mimeType: 'audio/webm;codecs=opus' })
-            mediaRecorderRef.current = mr; audioChunksRef.current = []
-            mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
-            mr.start(1000); setIsRecording(true)
-            transcriptIntervalRef.current = setInterval(() => { if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop() }, 15000)
-            mr.onstop = () => {
-                const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' }); audioChunksRef.current = []
-                transcribeChunk(blob)
-                if (!meetingEndedRef.current && streamRef.current) {
-                    try {
-                        const nr = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm;codecs=opus' })
-                        mediaRecorderRef.current = nr
-                        nr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
-                        nr.onstop = mr.onstop; nr.start(1000)
-                    } catch { }
+            setIsRecording(true)
+
+            const recordChunk = () => {
+                if (meetingEndedRef.current || !streamRef.current) return
+                const chunks: Blob[] = []
+                // Use mr.start() WITHOUT a timeslice — the browser writes a single
+                // self-contained WebM container that ffmpeg/Whisper can decode cleanly.
+                // Start(1000) fragmented slices produce invalid multi-cluster WebMs.
+                const mr = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm;codecs=opus' })
+                mediaRecorderRef.current = mr
+                mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
+                mr.onstop = () => {
+                    const blob = new Blob(chunks, { type: 'audio/webm' })
+                    transcribeChunk(blob)
+                    // Schedule next chunk immediately (transcription runs async in background)
+                    if (!meetingEndedRef.current && streamRef.current) recordChunk()
                 }
+                mr.start() // no timeslice → one clean blob
+                transcriptIntervalRef.current = setTimeout(() => {
+                    if (mr.state === 'recording') mr.stop()
+                }, 15000)
             }
+
+            recordChunk()
         } catch (e) { console.error('[Overlay] Recording:', e) }
     }, [transcribeChunk])
 
     const stopRecording = useCallback(() => {
         meetingEndedRef.current = true
-        if (transcriptIntervalRef.current) { clearInterval(transcriptIntervalRef.current); transcriptIntervalRef.current = null }
+        if (transcriptIntervalRef.current) { clearTimeout(transcriptIntervalRef.current); transcriptIntervalRef.current = null }
         if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
         if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
         setIsRecording(false)
@@ -293,13 +300,48 @@ function OverlayContent() {
         if (!force && chunks.length - lastSummarizedCount.current < 3) return
         lastSummarizedCount.current = chunks.length; setIsGeneratingSummary(true)
         try {
-            const res = await fetch('/api/generate-summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meetingTranscript: chunks.map(c => `[${c.timestamp}] ${c.text}`).join('\n'), meetingTitle: title }) })
+            const res = await fetch('/api/generate-summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meetingTranscript: chunks.map(c => `[${c.timestamp}] ${c.text}`).join('\n'), meetingTitle: title, platform }) })
             if (res.ok) { const d = await res.json(); setLiveSummary(d.summary || '') }
         } catch { } finally { setIsGeneratingSummary(false) }
-    }, [title])
+    }, [title, platform])
+
+    // Post-meeting finalization: update title + save tasks
+    const finalizeMeeting = useCallback(async (chunks: TranscriptChunk[]) => {
+        if (chunks.length === 0 || !dbMeetingIdRef.current) return
+        setIsGeneratingSummary(true)
+        try {
+            const transcript = chunks.map(c => `[${c.timestamp}] ${c.text}`).join('\n')
+            const res = await fetch('/api/generate-summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meetingTranscript: transcript, meetingTitle: title, platform }) })
+            if (!res.ok) return
+            const { summary: finalSummary, suggestedTitle } = await res.json()
+            setLiveSummary(finalSummary || '')
+
+            // 1. Patch title if Gemini gave us one
+            const newTitle = suggestedTitle || title || platform
+            if (newTitle && dbMeetingIdRef.current) {
+                await fetch(`/api/meetings/${dbMeetingIdRef.current}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTitle }) }).catch(() => { })
+            }
+
+            // 2. Save meeting as completed with final summary
+            const endedAt = new Date()
+            await fetch(`/api/meetings/${dbMeetingIdRef.current}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'completed', endedAt: endedAt.toISOString(), durationMs: endedAt.getTime() - meetingStartTimeRef.current.getTime(), transcript: chunks, summary: finalSummary }) }).catch(() => { })
+
+            // 3. Extract events → save to tasks collection
+            if (finalSummary && dbMeetingIdRef.current) {
+                const user = localStorage.getItem('user'); const userId = user ? JSON.parse(user)._id || JSON.parse(user).id : null
+                const extractRes = await fetch('/api/extract-events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: finalSummary, userName }) }).catch(() => null)
+                if (extractRes?.ok) {
+                    const { events } = await extractRes.json()
+                    if (Array.isArray(events) && events.length > 0 && userId) {
+                        await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, meetingId: dbMeetingIdRef.current, meetingTitle: newTitle, tasks: events }) }).catch(() => { })
+                    }
+                }
+            }
+        } catch { } finally { setIsGeneratingSummary(false) }
+    }, [title, platform, userName])
 
     useEffect(() => { if (transcript.length > 0) generateLiveSummary(transcript) }, [transcript, generateLiveSummary])
-    useEffect(() => { if (meetingEnded && transcript.length > 0) generateLiveSummary(transcript, true).then(() => updateMeetingInDB(transcript, liveSummary)) }, [meetingEnded]) // eslint-disable-line
+    useEffect(() => { if (meetingEnded && transcript.length > 0) finalizeMeeting(transcript) }, [meetingEnded]) // eslint-disable-line
 
     /* Chat */
     const sendMessage = useCallback(async () => {
@@ -352,6 +394,12 @@ function OverlayContent() {
     useEffect(() => { if (transcript.length > 0) detectEvents(transcript) }, [transcript, detectEvents])
 
     useEffect(() => { if (window.electronAPI?.onMeetingEnded) return window.electronAPI.onMeetingEnded(() => { setMeetingEnded(true); stopRecording() }) }, [stopRecording])
+
+    // Auto-start Whisper mic + save meeting to DB when overlay opens
+    useEffect(() => {
+        saveMeetingToDB()
+        startRecording()
+    }, []) // eslint-disable-line
 
     return (
         <div className="w-screen h-screen overflow-hidden" style={{ background: 'transparent' }}>

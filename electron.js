@@ -504,9 +504,18 @@ ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer)
       const whisperCmd = `"${whisperBin}" "${webmPath}" --model base --output_format txt --output_dir "${tmpDir}" --fp16 False 2>&1`;
       console.log(`[Dejavue DEBUG] Running Whisper command: ${whisperCmd}`);
 
-      // Include the Python bin dir in PATH so whisper can find ffmpeg
-      const pythonBinDir = path.dirname(whisperBin);
-      const env = { ...process.env, PATH: `${pythonBinDir}:${process.env.PATH}` };
+      // Always include all known Python bin dirs so whisper can find ffmpeg.
+      // path.dirname('whisper') === '.' which is useless, so we hardcode the dirs.
+      const homeDir2 = require('os').homedir();
+      const extraPaths = [
+        `${homeDir2}/Library/Python/3.9/bin`,
+        `${homeDir2}/Library/Python/3.10/bin`,
+        `${homeDir2}/Library/Python/3.11/bin`,
+        `${homeDir2}/.local/bin`,
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+      ].join(':');
+      const env = { ...process.env, PATH: `${extraPaths}:${process.env.PATH}` };
 
       exec(whisperCmd, { timeout: 120000, env }, (error, stdout, stderr) => {
         console.log(`[Dejavue DEBUG] Whisper exec done. error: ${error?.message || 'none'}`);

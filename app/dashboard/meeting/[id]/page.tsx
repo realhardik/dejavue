@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, FileText, MessageSquare, Download, Clock, Calendar, Loader2, Pencil, Check, X } from 'lucide-react'
 import Link from 'next/link'
 import { AddToCalendarButton } from '@/components/add-to-calendar-button'
+import { useTasks } from '@/contexts/tasks-context'
 
 interface MeetingEvent {
   person: string
@@ -71,10 +72,18 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
-  const [events, setEvents] = useState<MeetingEvent[] | null>(null)
+  const [fallbackEvents, setFallbackEvents] = useState<MeetingEvent[] | null>(null)
   const [isExtractingEvents, setIsExtractingEvents] = useState(false)
   const titleInputRef = useRef<HTMLInputElement>(null)
   const userName = typeof window !== 'undefined' ? (() => { try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.name || u.email || '' } catch { return '' } })() : ''
+
+  // Read tasks from global context
+  const { tasksByMeeting, isLoading: tasksLoading } = useTasks()
+  const contextTasks = tasksByMeeting(id)
+  // Show tasks from context if available, otherwise local fallback extraction
+  const events: MeetingEvent[] = contextTasks.length > 0
+    ? contextTasks.map(t => ({ person: t.person, task: t.task, deadline: t.deadline, type: t.type, isCurrentUser: t.isCurrentUser }))
+    : (fallbackEvents ?? [])
 
   useEffect(() => {
     fetch(`/api/meetings/${id}`)
@@ -86,7 +95,7 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
         setMeeting(data.meeting)
         setEditTitle(data.meeting.title)
         if (Array.isArray(data.meeting.chatHistory)) setChatHistory(data.meeting.chatHistory)
-        if (Array.isArray(data.meeting.events)) setEvents(data.meeting.events)
+        if (Array.isArray(data.meeting.events)) setFallbackEvents(data.meeting.events)
         setIsLoading(false)
       })
       .catch(err => {
@@ -125,9 +134,9 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
 
   const hasExtractedRef = useRef(false)
 
-  // Extract events once from summary (only if not already extracted)
+  // Fallback: extract from summary if no tasks in context (older meetings only)
   const extractAndSaveEvents = useCallback(async (summary: string, meetingTitle: string) => {
-    if (!summary || hasExtractedRef.current) return
+    if (!summary || hasExtractedRef.current || contextTasks.length > 0) return
     hasExtractedRef.current = true
     setIsExtractingEvents(true)
     try {
@@ -137,21 +146,16 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
       })
       if (!res.ok) return
       const { events: extracted } = await res.json()
-      if (!extracted?.length) { setEvents([]); return }
-      setEvents(extracted)
-      await fetch(`/api/meetings/${id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ events: extracted }),
-      }).catch(() => { })
-    } catch { setEvents([]) } finally { setIsExtractingEvents(false) }
-  }, [id, userName])
+      setFallbackEvents(extracted?.length ? extracted : [])
+    } catch { setFallbackEvents([]) } finally { setIsExtractingEvents(false) }
+  }, [id, userName, contextTasks.length])
 
   // Trigger event extraction when summary loads (runs once, guarded by ref)
   useEffect(() => {
-    if (meeting?.summary && events === null && !isExtractingEvents) {
+    if (meeting?.summary && fallbackEvents === null && !isExtractingEvents && contextTasks.length === 0 && !tasksLoading) {
       extractAndSaveEvents(meeting.summary, meeting.title)
     }
-  }, [meeting?.summary, meeting?.title, events, isExtractingEvents, extractAndSaveEvents])
+  }, [meeting?.summary, meeting?.title, fallbackEvents, isExtractingEvents, extractAndSaveEvents, contextTasks.length, tasksLoading])
 
   const meetingMoM = useMemo(() => {
     if (!meeting) return ''

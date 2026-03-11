@@ -4,7 +4,19 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { Video, Settings, LogOut, BarChart3, MessageSquare, History } from 'lucide-react'
+import { Video, Settings, LogOut, BarChart3, CheckSquare, History } from 'lucide-react'
+import { useTasks } from '@/contexts/tasks-context'
+
+function TasksBadge() {
+  const { tasks } = useTasks()
+  const pending = tasks.filter(t => t.isCurrentUser && !t.done).length
+  if (!pending) return null
+  return (
+    <span className="ml-auto mr-2 flex-shrink-0 min-w-[18px] h-[18px] rounded-full bg-primary text-white text-[10px] font-bold flex items-center justify-center">
+      {pending > 99 ? '99+' : pending}
+    </span>
+  )
+}
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -31,7 +43,7 @@ export function Sidebar() {
   const menuItems = [
     { href: '/dashboard', icon: Video, label: 'Dashboard', key: 'dashboard' },
     { href: '/dashboard/meetings', icon: History, label: 'Meetings', key: 'meetings' },
-    { href: '/dashboard/chat', icon: MessageSquare, label: 'Chat', key: 'chat' },
+    { href: '/dashboard/tasks', icon: CheckSquare, label: 'Tasks', key: 'tasks', badge: true },
     { href: '/dashboard/analytics', icon: BarChart3, label: 'Analytics', key: 'analytics' },
   ]
 
@@ -60,7 +72,7 @@ export function Sidebar() {
       <nav className="flex-1 space-y-2 px-4">
         {menuItems.map((item) => {
           const Icon = item.icon
-          const isActive = pathname === item.href
+          const isActive = pathname === item.href || (item.key === 'tasks' && pathname.startsWith('/dashboard/tasks'))
           return (
             <Link key={item.key} href={item.href} title={!isExpanded ? item.label : undefined}>
               <div
@@ -70,13 +82,14 @@ export function Sidebar() {
                   isActive && 'bg-primary/15 text-primary shadow-md shadow-primary/10'
                 )}
               >
-                <div className="w-12 h-12 flex items-center justify-center flex-shrink-0">
+                <div className="w-12 h-12 flex items-center justify-center flex-shrink-0 relative">
                   <Icon className="w-6 h-6" />
                 </div>
                 <span className={cn(
-                  "whitespace-nowrap overflow-hidden transition-opacity duration-300 ease-in-out",
+                  "whitespace-nowrap overflow-hidden transition-opacity duration-300 ease-in-out flex-1",
                   isExpanded ? "opacity-100" : "opacity-0"
                 )}>{item.label}</span>
+                {item.badge && isExpanded && <TasksBadge />}
               </div>
             </Link>
           )
@@ -104,12 +117,10 @@ export function Sidebar() {
       {/* Bottom: Settings & Logout */}
       <div className="border-t border-border/30 pt-4 space-y-2 px-4">
         <Link href="/dashboard/settings" title={!isExpanded ? "Settings" : undefined}>
-          <div
-            className={cn(
-              'h-12 rounded-lg flex items-center cursor-pointer transition-all duration-200 ease-out',
-              'hover:bg-primary/10 hover:text-primary hover:shadow-lg hover:shadow-primary/5'
-            )}
-          >
+          <div className={cn(
+            'h-12 rounded-lg flex items-center cursor-pointer transition-all duration-200 ease-out',
+            'hover:bg-primary/10 hover:text-primary hover:shadow-lg hover:shadow-primary/5'
+          )}>
             <div className="w-12 h-12 flex items-center justify-center flex-shrink-0">
               <Settings className="w-6 h-6" />
             </div>
