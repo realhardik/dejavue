@@ -34,6 +34,10 @@ interface ElectronAPI {
     saveSummary: (meetingId: string, summaryText: string, meetingTitle: string) => Promise<{ success: boolean; filePath?: string; error?: string }>
     // Desktop capturer
     getDesktopSources: () => Promise<{ id: string; name: string }[]>
+    // Overlay click-through
+    setIgnoreMouseEvents: (ignore: boolean) => Promise<void>
+    // Register active meeting DB id for quit-time cleanup
+    registerMeetingDbId: (dbId: string) => Promise<void>
 }
 
 declare global {

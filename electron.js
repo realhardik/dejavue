@@ -10,6 +10,21 @@ let mainWindow;
 let chatWindow = null;
 let monitoringInterval = null;
 let currentMeetings = [];
+let activeMeetingDbId = null; // tracks DB _id of any meeting currently being recorded
+let devPort = 3000; // tracks the actual Next.js dev server port (may be 3001 if 3000 is busy)
+
+// Probe which port Next.js is actually running on
+function detectDevPort() {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const tryPort = (port) => {
+      const req = http.get(`http://localhost:${port}`, () => { req.destroy(); resolve(port); });
+      req.on('error', () => { if (port === 3000) tryPort(3001); else resolve(3000); });
+      req.setTimeout(1000, () => { req.destroy(); if (port === 3000) tryPort(3001); else resolve(3000); });
+    };
+    tryPort(3000);
+  });
+}
 
 // ──────────────────────────────────────────────
 // Permission Management
@@ -331,12 +346,21 @@ function openChatWindow(meeting) {
   const recordingsDir = path.join(app.getPath('userData'), 'recordings', meetingId);
   fs.mkdirSync(recordingsDir, { recursive: true });
 
+  const { screen } = require('electron');
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+
   chatWindow = new BrowserWindow({
-    width: 480,
-    height: 650,
-    minWidth: 380,
-    minHeight: 500,
-    title: 'AI Chatbot',
+    width,
+    height,
+    x: 0,
+    y: 0,
+    title: 'DejaVue Overlay',
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    resizable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -345,10 +369,11 @@ function openChatWindow(meeting) {
   });
 
   const chatUrl = isDev
-    ? `http://localhost:3000/dashboard/ai-chat?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`
-    : `file://${path.join(__dirname, 'out/dashboard/ai-chat.html')}?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`;
+    ? `http://localhost:${devPort}/dashboard/overlay?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`
+    : `file://${path.join(__dirname, 'out/dashboard/overlay.html')}?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`;
 
   chatWindow.loadURL(chatUrl);
+  chatWindow.setIgnoreMouseEvents(false); // allow click-through on transparent areas later if needed
   chatWindow.on('closed', () => { chatWindow = null; });
 }
 
@@ -401,7 +426,7 @@ function createWindow() {
   });
 
   const startUrl = isDev
-    ? 'http://localhost:3000'
+    ? `http://localhost:${devPort}`
     : `file://${path.join(__dirname, 'out/index.html')}`;
 
   mainWindow.loadURL(startUrl);
@@ -478,9 +503,9 @@ ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer)
         }
       }
 
-      // Force Hindi language mode - handles Hinglish (Hindi+English mix) well
-      // Prevents random detection of Urdu/Polish/Japanese etc.
-      const whisperCmd = `"${whisperBin}" "${webmPath}" --model base --output_format txt --output_dir "${tmpDir}" --language hi 2>&1`;
+      // Auto-detect language — far more accurate than forcing Hindi.
+      // Whisper's auto-detect correctly handles English, Hinglish, etc.
+      const whisperCmd = `"${whisperBin}" "${webmPath}" --model base --output_format txt --output_dir "${tmpDir}" --fp16 False 2>&1`;
       console.log(`[Dejavue DEBUG] Running Whisper command: ${whisperCmd}`);
 
       // Include the Python bin dir in PATH so whisper can find ffmpeg
@@ -504,35 +529,33 @@ ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer)
           try { fs.unlinkSync(webmPath); } catch { }
           try { fs.unlinkSync(txtPath); } catch { }
 
-          // ── Silence/noise filter ──────────────────────
-          // Whisper hallucinates Devanagari, random phrases, etc. on silence
-          const devanagariChars = (text.match(/[\u0900-\u097F]/g) || []).length;
-          const totalChars = text.replace(/\s/g, '').length;
-          const devanagariRatio = totalChars > 0 ? devanagariChars / totalChars : 0;
+          // ── Noise/hallucination filter ────────────────────────────────────
+          // Only filter obvious silence hallucinations. Keep single words — they're
+          // often real (names, short answers, "yes", "gotcha", etc.)
 
-          // Filter 1: mostly Devanagari (hallucination) — over 40% Devanagari chars
-          if (devanagariRatio > 0.4) {
-            console.log(`[Dejavue DEBUG] Filtered: too much Devanagari (${(devanagariRatio * 100).toFixed(0)}%), likely hallucination`);
+          // Filter 1: completely empty
+          if (!text || text.trim().length === 0) {
             resolve({ success: true, text: '' });
             return;
           }
 
-          // Filter 2: too short (less than 3 words after cleanup)
-          const words = text.replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 1);
-          if (words.length < 3) {
-            console.log(`[Dejavue DEBUG] Filtered: too few words (${words.length}), likely noise`);
-            resolve({ success: true, text: '' });
-            return;
-          }
-
-          // Filter 3: common Whisper hallucination phrases
+          // Filter 2: known Whisper silence hallucinations on quiet audio
           const hallucinations = [
             'thank you for watching', 'thanks for watching', 'subscribe',
             'subs by', 'subtitles by', 'amara.org', 'please subscribe',
+            'you', // single word "you" alone is nearly always hallucination
           ];
-          const lower = text.toLowerCase();
-          if (hallucinations.some(h => lower.includes(h))) {
+          const lower = text.toLowerCase().trim();
+          if (hallucinations.some(h => lower === h || lower.includes('thank you for watching'))) {
             console.log(`[Dejavue DEBUG] Filtered: known hallucination phrase`);
+            resolve({ success: true, text: '' });
+            return;
+          }
+
+          // Filter 3: pure whitespace / punctuation only
+          const stripped = text.replace(/[^\w]/g, '').trim();
+          if (stripped.length < 2) {
+            console.log(`[Dejavue DEBUG] Filtered: no real content`);
             resolve({ success: true, text: '' });
             return;
           }
@@ -603,7 +626,48 @@ ipcMain.handle('desktop-capturer:get-sources', async () => {
   }
 });
 
+// Renderer registers its DB meeting _id so main process can finalize it on quit
+ipcMain.handle('meeting:register-db-id', (_event, dbId) => {
+  activeMeetingDbId = dbId;
+  console.log(`[Dejavue] Registered active meeting DB id: ${dbId}`);
+});
+
+// On quit (even Ctrl-C / force-quit mid-meeting), mark the active meeting as completed
+function finalizeActiveMeeting() {
+  if (!activeMeetingDbId) return;
+  const id = activeMeetingDbId;
+  activeMeetingDbId = null;
+  const port = isDev ? 3001 : 3000; // dev-electron uses port 3001 if 3000 is busy; try both
+  const http = require('http');
+  const body = JSON.stringify({ status: 'completed', endedAt: new Date().toISOString() });
+
+  const tryPatch = (p) => new Promise((resolve) => {
+    const req = http.request(
+      { hostname: 'localhost', port: p, path: `/api/meetings/${id}`, method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      () => resolve(true)
+    );
+    req.on('error', () => resolve(false));
+    req.write(body);
+    req.end();
+  });
+
+  // Try port 3001 first (dev), then 3000
+  tryPatch(3001).then(ok => { if (!ok) tryPatch(3000); });
+  console.log(`[Dejavue] Finalized meeting ${id} as completed on quit`);
+}
+
+app.on('before-quit', finalizeActiveMeeting);
+app.on('will-quit', finalizeActiveMeeting);
+
+// Overlay mouse click-through: transparent areas pass events to underneath windows
+ipcMain.handle('overlay:ignore-mouse-events', (_event, ignore) => {
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.setIgnoreMouseEvents(ignore, { forward: true });
+  }
+});
+
 ipcMain.handle('permissions:reset', () => {
+
   if (fs.existsSync(PERM_FILE)) fs.unlinkSync(PERM_FILE);
   return true;
 });
@@ -614,13 +678,19 @@ ipcMain.handle('permissions:reset', () => {
 app.on('ready', () => {
   // Auto-grant mic/camera permissions for the chatbot window
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    const allowedPermissions = ['media', 'microphone', 'audioCapture'];
+    const allowedPermissions = ['media', 'microphone', 'audioCapture', 'speech-recognition'];
     if (allowedPermissions.includes(permission)) {
       console.log(`[Dejavue] Auto-granting permission: ${permission}`);
       callback(true);
     } else {
       callback(false);
     }
+  });
+
+  // Also grant media/speech permission checks (for navigator.permissions.query)
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    const allowedPermissions = ['media', 'microphone', 'audioCapture', 'speech-recognition'];
+    return allowedPermissions.includes(permission);
   });
 
   createWindow();

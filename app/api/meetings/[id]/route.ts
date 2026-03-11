@@ -51,6 +51,7 @@ export async function PATCH(
         if (body.status !== undefined) updateFields.status = body.status
         if (body.endedAt !== undefined) updateFields.endedAt = new Date(body.endedAt)
         if (body.durationMs !== undefined) updateFields.durationMs = body.durationMs
+        if (body.chatHistory !== undefined) updateFields.chatHistory = body.chatHistory
 
         if (Object.keys(updateFields).length === 0) {
             return NextResponse.json({ error: 'No fields to update' }, { status: 400 })

@@ -8,21 +8,21 @@ import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { TrendingUp, Users, Clock, Zap, Loader2 } from 'lucide-react'
 
 interface AnalyticsData {
-  totalMeetings: number
-  totalHours: number
-  avgDurationMin: number
-  meetingsPerDay: number
-  todayCount: number
-  todayDuration: string
-  thisWeekCount: number
-  weeklyChart: { name: string; meetings: number; duration: number }[]
-  platformChart: { name: string; value: number; fill: string }[]
+  totalMeetings: number,
+  totalHours: number,
+  avgDurationMin: number,
+  meetingsPerDay: number,
+  todayCount: number,
+  todayDuration: string,
+  thisWeekCount: number,
+  weeklyChart: { name: string; meetings: number; duration: number }[],
+  platformChart: { name: string; value: number; fill: string }[],
   recentActivity: { title: string; date: string; time: string; duration: string; platform: string }[]
-}
+};
 
 export default function AnalyticsPage() {
   const [data, setData] = useState<AnalyticsData | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const user = localStorage.getItem('user')

@@ -38,4 +38,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Desktop capturer (for system audio)
   getDesktopSources: () => ipcRenderer.invoke('desktop-capturer:get-sources'),
+
+  // Overlay click-through: pass true to let clicks fall through transparent areas
+  setIgnoreMouseEvents: (ignore) => ipcRenderer.invoke('overlay:ignore-mouse-events', ignore),
+
+  // Register the active meeting's DB _id so main process can finalize it on quit
+  registerMeetingDbId: (dbId) => ipcRenderer.invoke('meeting:register-db-id', dbId),
 });

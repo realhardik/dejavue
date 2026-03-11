@@ -423,7 +423,7 @@ function AIChatContent() {
     // ─── Meeting Over UI ─────────────────────
     if (meetingEnded) {
         return (
-            <div className="min-h-screen bg-background flex flex-col">
+            <div className="min-h-screen flex flex-col">
                 <header className="border-b border-border/50 p-4">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/30 flex items-center justify-center">

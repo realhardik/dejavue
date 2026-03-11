@@ -4,10 +4,18 @@ import { Sidebar } from '@/components/sidebar'
 import { LiveTranscription } from '@/components/live-transcription'
 import { MeetingDetector } from '@/components/meeting-detector'
 import { ChatInterface } from '@/components/chat-interface'
-import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Phone, Settings, Share2, MoreVertical } from 'lucide-react'
+import { Phone, Settings, Share2 } from 'lucide-react'
+import dynamic from 'next/dynamic'
+
+// Dynamically import so Web Speech API (browser-only) doesn't break SSR
+const LiveSubtitleBar = dynamic(
+  () => import('@/components/live-subtitles').then(m => ({
+    default: () => <m.LiveSubtitles mode="bar" />
+  })),
+  { ssr: false }
+)
 
 export default function LiveMeetingPage() {
   return (
@@ -51,9 +59,16 @@ export default function LiveMeetingPage() {
         {/* Main Content */}
         <main className="flex-1 overflow-hidden p-4">
           <div className="grid grid-cols-3 gap-4 h-full">
-            {/* Left: Live Transcription */}
-            <div className="col-span-2 flex flex-col">
-              <LiveTranscription />
+
+            {/* Left: Live Transcription + Subtitle Bar */}
+            <div className="col-span-2 flex flex-col gap-3 min-h-0">
+              <div className="flex-1 min-h-0">
+                <LiveTranscription />
+              </div>
+              {/* Real-time subtitle strip */}
+              <div className="flex-shrink-0 px-1">
+                <LiveSubtitleBar />
+              </div>
             </div>
 
             {/* Right: Chat & Detector */}
