@@ -24,78 +24,106 @@ function useDraggable(initialPos: { x: number; y: number }) {
     return { pos, onMouseDown }
 }
 
-/* ─── subtitle hook ─────────────────────────────────────── */
+/* ─── subtitle hook (Transformers.js Worker) ────── */
 function useSubtitles(lang: 'en' | 'hi') {
     const [subtitleText, setSubtitleText] = useState('')
-    const [interimText, setInterimText] = useState('')
-    const [status, setStatus] = useState<'starting' | 'listening' | 'error'>('starting')
-    const recRef = useRef<any>(null)
-    const stoppedRef = useRef(false)
-    const langCode = lang === 'hi' ? 'hi-IN' : 'en-US'
+    const [status, setStatus] = useState<'starting' | 'listening' | 'error' | 'loading'>('loading')
+    const [progress, setProgress] = useState(0)
+    const workerRef = useRef<Worker | null>(null)
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+    const streamRef = useRef<MediaStream | null>(null)
+    const activeRef = useRef(false)
 
-    const start = useCallback(() => {
-        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-        if (!SR || stoppedRef.current) { setStatus('error'); return }
+    // Setup worker
+    useEffect(() => {
+        workerRef.current = new Worker('/worker.js', { type: 'module' })
+        workerRef.current.onmessage = (e) => {
+            const { status: s, text, progress: p } = e.data
+            if (s === 'progress' && p?.progress) setProgress(Math.round(p.progress))
+            if (s === 'ready') setStatus('starting')
+            if (s === 'complete' && text?.trim()) {
+                setSubtitleText(prev => {
+                    const prevWords = prev.trim().split(/\s+/).filter(Boolean)
+                    // If we already have 10+ words showing, reset to just the new chunk
+                    if (prevWords.length >= 10) return text.trim()
+                    // Otherwise append
+                    return (prev + ' ' + text.trim()).trim()
+                })
+            }
+        }
+        workerRef.current.postMessage({ type: 'load' })
+        return () => { workerRef.current?.terminate() }
+    }, [])
 
+    const startRecording = useCallback(async () => {
+        if (!workerRef.current || status === 'loading') return
         try {
-            const rec = new SR()
-            rec.continuous = true
-            rec.interimResults = true
-            rec.lang = langCode
-            rec.maxAlternatives = 1
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+            streamRef.current = stream
+            activeRef.current = true
+            setStatus('listening')
 
-            rec.onstart = () => setStatus('listening')
-
-            rec.onresult = (e: any) => {
-                let interim = ''
-                let final = ''
-                for (let i = e.resultIndex; i < e.results.length; i++) {
-                    const t = e.results[i][0].transcript
-                    if (e.results[i].isFinal) final += t + ' '
-                    else interim += t
+            const startChunk = () => {
+                if (!activeRef.current || !streamRef.current) return
+                const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+                mediaRecorderRef.current = mr
+                const chunks: Blob[] = []
+                mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
+                mr.onstop = async () => {
+                    const blob = new Blob(chunks, { type: 'audio/webm' })
+                    if (blob.size > 1000 && workerRef.current) {
+                        try {
+                            const audioCtx = new AudioContext({ sampleRate: 16000 })
+                            const arrayBuffer = await blob.arrayBuffer()
+                            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
+                            const audioData = audioBuffer.getChannelData(0)
+                            workerRef.current.postMessage({ type: 'transcribe', audio: audioData, lang })
+                        } catch (e) { console.error('Audio decode err', e) }
+                    }
+                    if (activeRef.current) startChunk() // Loop
                 }
-                if (final) setSubtitleText(prev => { const u = (prev + ' ' + final).trim(); return u.length > 400 ? u.slice(-400) : u })
-                setInterimText(interim)
+                // Record 6 second chunks for subtitles — more context = better accuracy
+                mr.start()
+                setTimeout(() => { if (mr.state === 'recording') mr.stop() }, 3000)
             }
+            startChunk()
 
-            rec.onerror = (e: any) => {
-                console.warn('[Subtitles] error:', e.error)
-                if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setStatus('error')
-            }
-
-            rec.onend = () => {
-                if (!stoppedRef.current && recRef.current === rec) {
-                    setStatus('starting')
-                    setTimeout(() => { if (!stoppedRef.current) { setStatus('listening'); try { rec.start() } catch { } } }, 300)
-                }
-            }
-
-            recRef.current = rec
-            rec.start()
         } catch (e) {
-            console.error('[Subtitles] failed to start:', e)
             setStatus('error')
         }
-    }, [langCode])
+    }, [status, lang])
 
-    const stop = useCallback(() => {
-        stoppedRef.current = true
-        if (recRef.current) { recRef.current.onend = null; recRef.current.stop(); recRef.current = null }
+    const stopRecording = useCallback(() => {
+        activeRef.current = false
+        if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
+        if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
         setStatus('starting')
     }, [])
 
     useEffect(() => {
-        stoppedRef.current = false
-        stop()
-        stoppedRef.current = false
-        setSubtitleText(''); setInterimText('')
-        const t = setTimeout(start, 400)
-        return () => clearTimeout(t)
-    }, [langCode]) // eslint-disable-line
+        if (status === 'starting') {
+            setSubtitleText('')
+            stopRecording()
+            setTimeout(startRecording, 500)
+        }
+    }, [status, startRecording, stopRecording])
 
-    useEffect(() => () => { stoppedRef.current = true; stop() }, [stop])
+    // When language changes, force-stop and restart with new lang
+    useEffect(() => {
+        if (status === 'loading') return // don't interrupt model download
+        activeRef.current = false
+        if (mediaRecorderRef.current?.state === 'recording') {
+            try { mediaRecorderRef.current.stop() } catch { }
+        }
+        if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
+        setSubtitleText('')
+        setStatus('starting') // triggers the recording restart effect above
+    }, [lang]) // eslint-disable-line
 
-    return { subtitleText, interimText, status }
+    // Cleanup on unmount
+    useEffect(() => () => stopRecording(), [stopRecording])
+
+    return { subtitleText, interimText: '', status, progress }
 }
 
 /* ─── types ─────────────────────────────────────────────── */
@@ -126,7 +154,7 @@ function OverlayContent() {
 
     const { pos, onMouseDown } = useDraggable({ x: typeof window !== 'undefined' ? window.innerWidth - 380 : 800, y: 80 })
     const { pos: subPos, onMouseDown: subOnMouseDown } = useDraggable({ x: typeof window !== 'undefined' ? window.innerWidth / 2 - 200 : 400, y: typeof window !== 'undefined' ? window.innerHeight - 120 : 800 })
-    const { subtitleText, interimText, status: subtitleStatus } = useSubtitles(subtitleLang)
+    const { subtitleText, interimText, status: subtitleStatus, progress } = useSubtitles(subtitleLang)
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null)
     const audioChunksRef = useRef<Blob[]>([])
@@ -274,7 +302,14 @@ function OverlayContent() {
                     onMouseDown={subOnMouseDown}
                     className={`rounded-xl backdrop-blur-md px-4 py-2.5 text-center border transition-all cursor-grab active:cursor-grabbing ${subtitleStatus === 'error' ? 'bg-red-900/60 border-red-500/30' : subtitleText || interimText ? 'bg-black/75 border-white/10' : 'bg-black/40 border-white/5'}`}>
                     {subtitleStatus === 'error' ? (
-                        <span className="text-red-300 text-xs">⚠ Mic not accessible — check browser permissions</span>
+                        <span className="text-red-300 text-xs">⚠ Mic not accessible or worker error</span>
+                    ) : subtitleStatus === 'loading' ? (
+                        <div className="flex flex-col items-center gap-1.5">
+                            <span className="text-white/40 text-xs">Downloading offline models ({progress}%)…</span>
+                            <div className="w-48 h-1 bg-white/10 rounded-full overflow-hidden">
+                                <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+                            </div>
+                        </div>
                     ) : subtitleText || interimText ? (
                         <>
                             <span className="text-white text-sm leading-relaxed">{subtitleText}</span>

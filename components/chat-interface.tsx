@@ -6,45 +6,39 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Send, Loader2, Bot, Trash2 } from 'lucide-react'
 
-interface ChatInterfaceProps {
-  meetingId?: string
-  meetingTitle?: string
-  meetingContext?: string
-}
-
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
 }
 
-export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatInterfaceProps) {
+interface ChatInterfaceProps {
+  meetingId?: string
+  meetingTitle?: string
+  meetingContext?: string
+  /** Pre-loaded chat history from parent — avoids DB fetch on every tab switch */
+  initialHistory?: ChatMessage[]
+  onHistoryChange?: (msgs: ChatMessage[]) => void
+}
+
+export function ChatInterface({ meetingId, meetingTitle, meetingContext, initialHistory, onHistoryChange }: ChatInterfaceProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(initialHistory ?? [])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true)
   const [isClearing, setIsClearing] = useState(false)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  /* Scroll to latest message */
+  // Keep parent in sync when history was changed from outside (e.g., another session)
+  useEffect(() => {
+    if (initialHistory) setMessages(initialHistory)
+  }, []) // eslint-disable-line — only run once on mount, parent owns the truth
+
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
-  /* Load saved chat history on mount */
-  useEffect(() => {
-    if (!meetingId) { setIsLoadingHistory(false); return }
-    fetch(`/api/meetings/${meetingId}`)
-      .then(r => r.json())
-      .then(d => {
-        const history = d.meeting?.chatHistory
-        if (Array.isArray(history) && history.length > 0) setMessages(history)
-      })
-      .catch(() => { })
-      .finally(() => setIsLoadingHistory(false))
-  }, [meetingId])
-
-  /* Debounced save — fires 1.5s after the last message change */
+  /* Debounced save to DB — only writes, no reads */
   const saveHistory = useCallback((msgs: ChatMessage[]) => {
     if (!meetingId) return
+    onHistoryChange?.(msgs)
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(() => {
       fetch(`/api/meetings/${meetingId}`, {
@@ -53,13 +47,14 @@ export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatI
         body: JSON.stringify({ chatHistory: msgs }),
       }).catch(() => { })
     }, 1500)
-  }, [meetingId])
+  }, [meetingId, onHistoryChange])
 
   /* Clear chat */
   const clearChat = useCallback(async () => {
     if (!meetingId || isClearing) return
     setIsClearing(true)
     setMessages([])
+    onHistoryChange?.([])
     try {
       await fetch(`/api/meetings/${meetingId}`, {
         method: 'PATCH',
@@ -67,7 +62,7 @@ export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatI
         body: JSON.stringify({ chatHistory: [] }),
       })
     } catch { } finally { setIsClearing(false) }
-  }, [meetingId, isClearing])
+  }, [meetingId, isClearing, onHistoryChange])
 
   /* Send message */
   const sendMessage = useCallback(async () => {
@@ -110,11 +105,10 @@ export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatI
         })
       }
 
-      // Save after AI finishes responding
       const finalMessages = [...updatedMessages, { role: 'assistant' as const, content: assistantContent }]
       saveHistory(finalMessages)
     } catch {
-      const errMessages = [...updatedMessages, { role: 'assistant' as const, content: 'Sorry, I encountered an error. Please try again.' }]
+      const errMessages = [...updatedMessages, { role: 'assistant' as const, content: 'Sorry, something went wrong.' }]
       setMessages(errMessages)
       saveHistory(errMessages)
     } finally {
@@ -137,10 +131,7 @@ export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatI
         </div>
         {messages.length > 0 && (
           <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearChat}
-            disabled={isClearing}
+            variant="ghost" size="sm" onClick={clearChat} disabled={isClearing}
             className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0 gap-1.5"
           >
             {isClearing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
@@ -151,11 +142,7 @@ export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatI
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {isLoadingHistory ? (
-          <div className="h-full flex items-center justify-center">
-            <Loader2 className="w-5 h-5 text-primary animate-spin" />
-          </div>
-        ) : messages.length === 0 ? (
+        {messages.length === 0 ? (
           <div className="h-full flex items-center justify-center">
             <Card className="p-8 border-border/50 text-center max-w-sm">
               <Bot className="w-10 h-10 text-primary/50 mx-auto mb-3" />
@@ -195,17 +182,12 @@ export function ChatInterface({ meetingId, meetingTitle, meetingContext }: ChatI
       <div className="border-t border-border/50 p-4">
         <form onSubmit={e => { e.preventDefault(); sendMessage() }} className="flex gap-2">
           <Input
-            value={input}
-            onChange={e => setInput(e.target.value)}
+            value={input} onChange={e => setInput(e.target.value)}
             placeholder="Ask a question about the meeting..."
-            disabled={isStreaming || isLoadingHistory}
+            disabled={isStreaming}
             className="bg-secondary border-border/50 text-foreground placeholder:text-muted-foreground"
           />
-          <Button
-            type="submit"
-            disabled={isStreaming || !input.trim() || isLoadingHistory}
-            className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
-          >
+          <Button type="submit" disabled={isStreaming || !input.trim()} className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground">
             <Send className="w-4 h-4" />
           </Button>
         </form>

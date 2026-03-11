@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef, use } from 'react'
+import { useEffect, useState, useRef, use, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Sidebar } from '@/components/sidebar'
 import { ChatInterface } from '@/components/chat-interface'
@@ -59,6 +59,7 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
   const [error, setError] = useState<string | null>(null)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editTitle, setEditTitle] = useState('')
+  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
   const titleInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -70,6 +71,8 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
       .then(data => {
         setMeeting(data.meeting)
         setEditTitle(data.meeting.title)
+        // Load chat history once — ChatInterface will use this as initial state
+        if (Array.isArray(data.meeting.chatHistory)) setChatHistory(data.meeting.chatHistory)
         setIsLoading(false)
       })
       .catch(err => {
@@ -106,8 +109,8 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
     setIsEditingTitle(false)
   }
 
-  // Build M.o.M text for download and AI context
-  const buildMoM = (): string => {
+  // Memoized — only recalculates when meeting data actually changes
+  const meetingMoM = useMemo(() => {
     if (!meeting) return ''
     const lines = [
       `Minutes of Meeting`,
@@ -124,32 +127,26 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
       meeting.summary || 'No summary available.',
       ``,
     ]
-
-    if (meeting.transcript && meeting.transcript.length > 0) {
+    if (meeting.transcript?.length > 0) {
       lines.push(`${'─'.repeat(50)}`)
       lines.push(`TRANSCRIPT`)
       lines.push(`${'─'.repeat(50)}`)
-      meeting.transcript.forEach(chunk => {
-        lines.push(`[${chunk.timestamp}] ${chunk.text}`)
-      })
+      meeting.transcript.forEach(chunk => lines.push(`[${chunk.timestamp}] ${chunk.text}`))
     }
-
     return lines.join('\n')
-  }
+  }, [meeting])
 
-  const handleDownloadMoM = () => {
-    const content = buildMoM()
-    const blob = new Blob([content], { type: 'text/plain' })
+  const handleDownloadMoM = useCallback(() => {
+    if (!meeting) return
+    const blob = new Blob([meetingMoM], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    const safeTitle = (meeting?.title || 'meeting').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
+    const safeTitle = (meeting.title || 'meeting').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
     a.download = `MoM_${safeTitle}.txt`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
     URL.revokeObjectURL(url)
-  }
+  }, [meeting, meetingMoM])
 
   if (isLoading) {
     return (
@@ -319,7 +316,9 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
                 <ChatInterface
                   meetingTitle={meeting.title}
                   meetingId={id}
-                  meetingContext={buildMoM()}
+                  meetingContext={meetingMoM}
+                  initialHistory={chatHistory}
+                  onHistoryChange={setChatHistory}
                 />
               </Card>
             </TabsContent>

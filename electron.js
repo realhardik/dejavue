@@ -556,7 +556,15 @@ ipcMain.handle('audio:transcribe', async (_event, meetingId, chunkIndex, buffer)
             return;
           }
 
-          resolve({ success: true, text });
+          // Filter 4: strip Whisper sound annotations like (audience laughing), [Music], [BLANK_AUDIO]
+          let cleanText = text.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').trim();
+          if (cleanText.replace(/[^\w]/g, '').trim().length < 2) {
+            console.log(`[Dejavue DEBUG] Filtered: annotation-only content`);
+            resolve({ success: true, text: '' });
+            return;
+          }
+
+          resolve({ success: true, text: cleanText });
         } else {
           console.error(`[Dejavue DEBUG] Whisper output file NOT found at ${txtPath}`);
           // List what IS in the temp dir
