@@ -6,20 +6,8 @@ import { Badge } from '@/components/ui/badge'
 import { Subtitles, MicOff, Mic, ChevronDown, Globe, Star } from 'lucide-react'
 
 const LANGUAGES = [
-    { code: 'en-US', label: 'English (US)', flag: '🇺🇸' },
-    { code: 'en-GB', label: 'English (UK)', flag: '🇬🇧' },
+    { code: 'en-US', label: 'English', flag: '🇺🇸' },
     { code: 'hi-IN', label: 'Hindi', flag: '🇮🇳' },
-    { code: 'mr-IN', label: 'Marathi', flag: '🇮🇳' },
-    { code: 'gu-IN', label: 'Gujarati', flag: '🇮🇳' },
-    { code: 'ta-IN', label: 'Tamil', flag: '🇮🇳' },
-    { code: 'te-IN', label: 'Telugu', flag: '🇮🇳' },
-    { code: 'bn-IN', label: 'Bengali', flag: '🇮🇳' },
-    { code: 'fr-FR', label: 'French', flag: '🇫🇷' },
-    { code: 'de-DE', label: 'German', flag: '🇩🇪' },
-    { code: 'es-ES', label: 'Spanish', flag: '🇪🇸' },
-    { code: 'zh-CN', label: 'Chinese (Simplified)', flag: '🇨🇳' },
-    { code: 'ja-JP', label: 'Japanese', flag: '🇯🇵' },
-    { code: 'ar-SA', label: 'Arabic', flag: '🇸🇦' },
 ]
 
 const LS_LANG_KEY = 'dejavue_subtitle_lang'

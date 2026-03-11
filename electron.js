@@ -11,20 +11,6 @@ let chatWindow = null;
 let monitoringInterval = null;
 let currentMeetings = [];
 let activeMeetingDbId = null; // tracks DB _id of any meeting currently being recorded
-let devPort = 3000; // tracks the actual Next.js dev server port (may be 3001 if 3000 is busy)
-
-// Probe which port Next.js is actually running on
-function detectDevPort() {
-  return new Promise((resolve) => {
-    const http = require('http');
-    const tryPort = (port) => {
-      const req = http.get(`http://localhost:${port}`, () => { req.destroy(); resolve(port); });
-      req.on('error', () => { if (port === 3000) tryPort(3001); else resolve(3000); });
-      req.setTimeout(1000, () => { req.destroy(); if (port === 3000) tryPort(3001); else resolve(3000); });
-    };
-    tryPort(3000);
-  });
-}
 
 // ──────────────────────────────────────────────
 // Permission Management
@@ -369,11 +355,21 @@ function openChatWindow(meeting) {
   });
 
   const chatUrl = isDev
-    ? `http://localhost:${devPort}/dashboard/overlay?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`
+    ? `http://localhost:3000/dashboard/overlay?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`
     : `file://${path.join(__dirname, 'out/dashboard/overlay.html')}?platform=${meeting.platform}&title=${encodeURIComponent(meeting.title)}&meetingId=${meetingId}`;
 
   chatWindow.loadURL(chatUrl);
-  chatWindow.setIgnoreMouseEvents(false); // allow click-through on transparent areas later if needed
+  chatWindow.setIgnoreMouseEvents(false);
+
+  // Grant speech-recognition + media permissions for the overlay window explicitly
+  const allowed = ['media', 'microphone', 'audioCapture', 'speech-recognition'];
+  chatWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(allowed.includes(permission));
+  });
+  chatWindow.webContents.session.setPermissionCheckHandler((_wc, permission) => {
+    return allowed.includes(permission);
+  });
+
   chatWindow.on('closed', () => { chatWindow = null; });
 }
 
@@ -426,7 +422,7 @@ function createWindow() {
   });
 
   const startUrl = isDev
-    ? `http://localhost:${devPort}`
+    ? 'http://localhost:3000'
     : `file://${path.join(__dirname, 'out/index.html')}`;
 
   mainWindow.loadURL(startUrl);
@@ -694,12 +690,8 @@ app.on('ready', () => {
   });
 
   createWindow();
-
-  // Auto-start monitoring if permission was previously granted
   const perm = isPermissionValid();
-  if (perm === true) {
-    setTimeout(() => startMonitoring(), 2000);
-  }
+  if (perm === true) setTimeout(() => startMonitoring(), 2000);
 });
 
 app.on('window-all-closed', () => {

@@ -5,7 +5,7 @@
   "main": "electron.js",
   "scripts": {
     "dev": "next dev",
-    "dev-electron": "concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "dev-electron": "lsof -ti:3000 | xargs kill -9 2>/dev/null || true && concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

@@ -2,9 +2,9 @@
 
 import { useSearchParams } from 'next/navigation'
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
-import { Bot, Mic, MicOff, Send, Loader2, FileText, X, GripHorizontal, RefreshCw } from 'lucide-react'
+import { Bot, Mic, Send, Loader2, FileText, X, GripHorizontal, RefreshCw, Globe } from 'lucide-react'
 
-/* ─── draggable hook ─────────────────────────────── */
+/* ─── draggable hook ────────────────────────────────────── */
 function useDraggable(initialPos: { x: number; y: number }) {
     const [pos, setPos] = useState(initialPos)
     const dragging = useRef(false)
@@ -24,43 +24,110 @@ function useDraggable(initialPos: { x: number; y: number }) {
     return { pos, onMouseDown }
 }
 
-/* ─── types ──────────────────────────────────────── */
+/* ─── subtitle hook ─────────────────────────────────────── */
+function useSubtitles(lang: 'en' | 'hi') {
+    const [subtitleText, setSubtitleText] = useState('')
+    const [interimText, setInterimText] = useState('')
+    const [status, setStatus] = useState<'starting' | 'listening' | 'error'>('starting')
+    const recRef = useRef<any>(null)
+    const stoppedRef = useRef(false)
+    const langCode = lang === 'hi' ? 'hi-IN' : 'en-US'
+
+    const start = useCallback(() => {
+        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        if (!SR || stoppedRef.current) { setStatus('error'); return }
+
+        try {
+            const rec = new SR()
+            rec.continuous = true
+            rec.interimResults = true
+            rec.lang = langCode
+            rec.maxAlternatives = 1
+
+            rec.onstart = () => setStatus('listening')
+
+            rec.onresult = (e: any) => {
+                let interim = ''
+                let final = ''
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    const t = e.results[i][0].transcript
+                    if (e.results[i].isFinal) final += t + ' '
+                    else interim += t
+                }
+                if (final) setSubtitleText(prev => { const u = (prev + ' ' + final).trim(); return u.length > 400 ? u.slice(-400) : u })
+                setInterimText(interim)
+            }
+
+            rec.onerror = (e: any) => {
+                console.warn('[Subtitles] error:', e.error)
+                if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setStatus('error')
+            }
+
+            rec.onend = () => {
+                if (!stoppedRef.current && recRef.current === rec) {
+                    setStatus('starting')
+                    setTimeout(() => { if (!stoppedRef.current) { setStatus('listening'); try { rec.start() } catch { } } }, 300)
+                }
+            }
+
+            recRef.current = rec
+            rec.start()
+        } catch (e) {
+            console.error('[Subtitles] failed to start:', e)
+            setStatus('error')
+        }
+    }, [langCode])
+
+    const stop = useCallback(() => {
+        stoppedRef.current = true
+        if (recRef.current) { recRef.current.onend = null; recRef.current.stop(); recRef.current = null }
+        setStatus('starting')
+    }, [])
+
+    useEffect(() => {
+        stoppedRef.current = false
+        stop()
+        stoppedRef.current = false
+        setSubtitleText(''); setInterimText('')
+        const t = setTimeout(start, 400)
+        return () => clearTimeout(t)
+    }, [langCode]) // eslint-disable-line
+
+    useEffect(() => () => { stoppedRef.current = true; stop() }, [stop])
+
+    return { subtitleText, interimText, status }
+}
+
+/* ─── types ─────────────────────────────────────────────── */
 interface TranscriptChunk { index: number; text: string; timestamp: string }
 interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
-/* ─── main content ───────────────────────────────── */
+/* ─── main ──────────────────────────────────────────────── */
 function OverlayContent() {
     const searchParams = useSearchParams()
     const platform = searchParams.get('platform') || 'unknown'
     const title = searchParams.get('title') || 'Meeting'
     const meetingId = searchParams.get('meetingId') || `meeting-${Date.now()}`
 
-    // User identity
-    const [userName, setUserName] = useState<string>('')
-
-    // Meeting state
+    const [userName, setUserName] = useState('')
     const [isRecording, setIsRecording] = useState(false)
     const [isTranscribing, setIsTranscribing] = useState(false)
     const [transcript, setTranscript] = useState<TranscriptChunk[]>([])
     const [meetingEnded, setMeetingEnded] = useState(false)
-
-    // Active tab
+    const [countdown, setCountdown] = useState(3)
     const [tab, setTab] = useState<'summary' | 'chat'>('summary')
-
-    // Summary tab
-    const [liveSummary, setLiveSummary] = useState<string>('')
+    const [liveSummary, setLiveSummary] = useState('')
     const [isGeneratingSummary, setIsGeneratingSummary] = useState(false)
     const lastSummarizedCount = useRef(0)
-
-    // Chat tab
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
     const [chatInput, setChatInput] = useState('')
     const [isSending, setIsSending] = useState(false)
+    const [subtitleLang, setSubtitleLang] = useState<'en' | 'hi'>('en')
 
-    // Draggable panel
     const { pos, onMouseDown } = useDraggable({ x: typeof window !== 'undefined' ? window.innerWidth - 380 : 800, y: 80 })
+    const { pos: subPos, onMouseDown: subOnMouseDown } = useDraggable({ x: typeof window !== 'undefined' ? window.innerWidth / 2 - 200 : 400, y: typeof window !== 'undefined' ? window.innerHeight - 120 : 800 })
+    const { subtitleText, interimText, status: subtitleStatus } = useSubtitles(subtitleLang)
 
-    // Refs
     const mediaRecorderRef = useRef<MediaRecorder | null>(null)
     const audioChunksRef = useRef<Blob[]>([])
     const chunkIndexRef = useRef(0)
@@ -74,68 +141,61 @@ function OverlayContent() {
 
     const info = { zoom: { icon: '🎥', label: 'Zoom' }, 'google-meet': { icon: '📹', label: 'Google Meet' }, unknown: { icon: '📞', label: 'Meeting' } }[platform] ?? { icon: '📞', label: 'Meeting' }
 
-    /* Load user name */
     useEffect(() => {
-        try {
-            const stored = localStorage.getItem('user')
-            if (stored) { const u = JSON.parse(stored); setUserName(u.name || u.email || '') }
-        } catch { }
+        try { const s = localStorage.getItem('user'); if (s) { const u = JSON.parse(s); setUserName(u.name || u.email || '') } } catch { }
     }, [])
 
-    /* Click-through: transparent areas pass events through, panel stays interactive */
-    useEffect(() => {
-        if (typeof window !== 'undefined' && window.electronAPI?.setIgnoreMouseEvents) {
-            window.electronAPI.setIgnoreMouseEvents(true)
-        }
-    }, [])
+    useEffect(() => { window.electronAPI?.setIgnoreMouseEvents?.(true) }, [])
+    const onEnter = () => window.electronAPI?.setIgnoreMouseEvents?.(false)
+    const onLeave = () => window.electronAPI?.setIgnoreMouseEvents?.(true)
 
-    const onPanelEnter = () => { if (window.electronAPI?.setIgnoreMouseEvents) window.electronAPI.setIgnoreMouseEvents(false) }
-    const onPanelLeave = () => { if (window.electronAPI?.setIgnoreMouseEvents) window.electronAPI.setIgnoreMouseEvents(true) }
-
-    /* Scroll chat to bottom */
     useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
 
+    // Countdown when meeting ends — stays in the same panel
+    useEffect(() => {
+        if (!meetingEnded) return
+        const iv = setInterval(() => {
+            setCountdown(c => {
+                if (c <= 1) { clearInterval(iv); try { window.close() } catch { } return 0 }
+                return c - 1
+            })
+        }, 1000)
+        return () => clearInterval(iv)
+    }, [meetingEnded])
+
     /* Transcription */
-    const transcribeChunk = useCallback(async (audioBlob: Blob) => {
-        if (audioBlob.size < 1000 || isTranscribingRef.current) return
-        isTranscribingRef.current = true
-        setIsTranscribing(true)
+    const transcribeChunk = useCallback(async (blob: Blob) => {
+        if (blob.size < 1000 || isTranscribingRef.current) return
+        isTranscribingRef.current = true; setIsTranscribing(true)
         try {
-            const buffer = await audioBlob.arrayBuffer()
+            const buffer = await blob.arrayBuffer()
             if (window.electronAPI?.transcribeAudio) {
                 const idx = chunkIndexRef.current++
                 const result = await window.electronAPI.transcribeAudio(meetingId, idx, buffer)
-                if (result.success && result.text?.trim()) {
-                    setTranscript(prev => [...prev, { index: idx, text: result.text.trim(), timestamp: new Date().toLocaleTimeString() }])
-                }
+                if (result.success && result.text?.trim()) setTranscript(prev => [...prev, { index: idx, text: result.text.trim(), timestamp: new Date().toLocaleTimeString() }])
             }
-        } catch (e) { console.error('[Overlay] Transcribe:', e) }
-        finally { isTranscribingRef.current = false; setIsTranscribing(false) }
+        } catch { } finally { isTranscribingRef.current = false; setIsTranscribing(false) }
     }, [meetingId])
 
     /* Recording */
     const startRecording = useCallback(async () => {
         try {
-            const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 } })
-            streamRef.current = micStream
-            const mr = new MediaRecorder(micStream, { mimeType: 'audio/webm;codecs=opus' })
-            mediaRecorderRef.current = mr
-            audioChunksRef.current = []
+            const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 } })
+            streamRef.current = mic
+            const mr = new MediaRecorder(mic, { mimeType: 'audio/webm;codecs=opus' })
+            mediaRecorderRef.current = mr; audioChunksRef.current = []
             mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
-            mr.start(1000)
-            setIsRecording(true)
+            mr.start(1000); setIsRecording(true)
             transcriptIntervalRef.current = setInterval(() => { if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop() }, 15000)
             mr.onstop = () => {
-                const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-                audioChunksRef.current = []
+                const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' }); audioChunksRef.current = []
                 transcribeChunk(blob)
                 if (!meetingEndedRef.current && streamRef.current) {
                     try {
                         const nr = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm;codecs=opus' })
                         mediaRecorderRef.current = nr
                         nr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
-                        nr.onstop = mr.onstop
-                        nr.start(1000)
+                        nr.onstop = mr.onstop; nr.start(1000)
                     } catch { }
                 }
             }
@@ -153,124 +213,100 @@ function OverlayContent() {
     /* DB */
     const saveMeetingToDB = useCallback(async () => {
         try {
-            const user = localStorage.getItem('user')
-            const userId = user ? JSON.parse(user).id : null
+            const user = localStorage.getItem('user'); const userId = user ? JSON.parse(user).id : null
             const res = await fetch('/api/meetings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, meetingId, title, platform }) })
-            if (res.ok) {
-                const d = await res.json()
-                dbMeetingIdRef.current = d.meeting._id
-                // Tell the main process about this meeting so it can finalize it on quit
-                window.electronAPI?.registerMeetingDbId?.(d.meeting._id)
-            }
+            if (res.ok) { const d = await res.json(); dbMeetingIdRef.current = d.meeting._id; window.electronAPI?.registerMeetingDbId?.(d.meeting._id) }
         } catch { }
     }, [meetingId, title, platform])
 
     const updateMeetingInDB = useCallback(async (t: TranscriptChunk[], s: string | null) => {
         if (!dbMeetingIdRef.current) return
         const endedAt = new Date()
-        await fetch(`/api/meetings/${dbMeetingIdRef.current}`, {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'completed', endedAt: endedAt.toISOString(), durationMs: endedAt.getTime() - meetingStartTimeRef.current.getTime(), transcript: t, summary: s }),
-        }).catch(() => { })
+        await fetch(`/api/meetings/${dbMeetingIdRef.current}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'completed', endedAt: endedAt.toISOString(), durationMs: endedAt.getTime() - meetingStartTimeRef.current.getTime(), transcript: t, summary: s }) }).catch(() => { })
     }, [])
 
-    /* Generate live summary */
+    /* Summary */
     const generateLiveSummary = useCallback(async (chunks: TranscriptChunk[], force = false) => {
         if (chunks.length === 0) return
-        if (!force && chunks.length - lastSummarizedCount.current < 3) return // every 3 new chunks
-        lastSummarizedCount.current = chunks.length
-        setIsGeneratingSummary(true)
+        if (!force && chunks.length - lastSummarizedCount.current < 3) return
+        lastSummarizedCount.current = chunks.length; setIsGeneratingSummary(true)
         try {
-            const fullTranscript = chunks.map(c => `[${c.timestamp}] ${c.text}`).join('\n')
-            const res = await fetch('/api/generate-summary', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ meetingTranscript: fullTranscript, meetingTitle: title }),
-            })
+            const res = await fetch('/api/generate-summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meetingTranscript: chunks.map(c => `[${c.timestamp}] ${c.text}`).join('\n'), meetingTitle: title }) })
             if (res.ok) { const d = await res.json(); setLiveSummary(d.summary || '') }
-        } catch { }
-        finally { setIsGeneratingSummary(false) }
+        } catch { } finally { setIsGeneratingSummary(false) }
     }, [title])
 
-    /* Auto-generate summary when transcript grows */
     useEffect(() => { if (transcript.length > 0) generateLiveSummary(transcript) }, [transcript, generateLiveSummary])
-
-    /* Final summary on meeting end, then save to DB */
-    useEffect(() => {
-        if (meetingEnded && transcript.length > 0) {
-            generateLiveSummary(transcript, true).then(() => {
-                updateMeetingInDB(transcript, liveSummary)
-            })
-        }
-    }, [meetingEnded]) // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { if (meetingEnded && transcript.length > 0) generateLiveSummary(transcript, true).then(() => updateMeetingInDB(transcript, liveSummary)) }, [meetingEnded]) // eslint-disable-line
 
     /* Chat */
     const sendMessage = useCallback(async () => {
         if (!chatInput.trim() || isSending) return
         const userMsg = chatInput.trim()
-        const updatedMessages = [...chatMessages, { role: 'user' as const, content: userMsg }]
-        setChatMessages(updatedMessages)
-        setChatInput('')
-        setIsSending(true)
+        const updated = [...chatMessages, { role: 'user' as const, content: userMsg }]
+        setChatMessages(updated); setChatInput(''); setIsSending(true)
         try {
-            // Build meeting context passed as the dedicated field the API expects
-            const identityLine = userName ? `The user's name is "${userName}". When they say "I", "me", or "my", they are referring to ${userName}.\n\n` : ''
-            const meetingContext = identityLine + (liveSummary
-                ? `Running meeting summary:\n${liveSummary}`
-                : transcript.length > 0
-                    ? `Live transcript:\n${transcript.map(c => `[${c.timestamp}] ${c.text}`).join('\n')}`
-                    : 'No transcript captured yet.')
-
-            const res = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
-                    meetingContext,
-                }),
-            })
+            const identityLine = userName ? `The user's name is "${userName}". When they say "I", "me", or "my", they refer to ${userName}.\n\n` : ''
+            const meetingContext = identityLine + (liveSummary ? `Running summary:\n${liveSummary}` : transcript.length > 0 ? `Transcript:\n${transcript.map(c => `[${c.timestamp}] ${c.text}`).join('\n')}` : 'No transcript yet.')
+            const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: updated.map(m => ({ role: m.role, content: m.content })), meetingContext }) })
             if (res.ok && res.body) {
-                const reader = res.body.getReader(); const decoder = new TextDecoder(); let content = ''
+                const reader = res.body.getReader(); const dec = new TextDecoder(); let content = ''
                 setChatMessages(prev => [...prev, { role: 'assistant', content: '' }])
-                while (true) {
-                    const { done, value } = await reader.read(); if (done) break
-                    content += decoder.decode(value, { stream: true })
-                    setChatMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'assistant', content }; return u })
-                }
-            } else {
-                const errText = await res.text().catch(() => 'Unknown error')
-                console.error('[Overlay Chat] API error:', res.status, errText)
-                setChatMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, could not reach the AI. Please try again.' }])
-            }
-        } catch (e) {
-            console.error('[Overlay Chat] Error:', e)
-            setChatMessages(prev => [...prev, { role: 'assistant', content: 'Something went wrong. Please try again.' }])
-        }
+                while (true) { const { done, value } = await reader.read(); if (done) break; content += dec.decode(value, { stream: true }); setChatMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'assistant', content }; return u }) }
+            } else { setChatMessages(prev => [...prev, { role: 'assistant', content: 'Could not reach AI — check quota or connection.' }]) }
+        } catch { setChatMessages(prev => [...prev, { role: 'assistant', content: 'Something went wrong.' }]) }
         finally { setIsSending(false) }
     }, [chatInput, isSending, chatMessages, liveSummary, transcript, userName])
 
-    /* Bootstrap */
-    useEffect(() => { saveMeetingToDB(); const t = setTimeout(() => startRecording(), 1500); return () => clearTimeout(t) }, [startRecording, saveMeetingToDB])
-    useEffect(() => {
-        if (typeof window !== 'undefined' && window.electronAPI?.onMeetingEnded) {
-            return window.electronAPI.onMeetingEnded(() => { setMeetingEnded(true); stopRecording() })
-        }
-    }, [stopRecording])
+    useEffect(() => { saveMeetingToDB(); const t = setTimeout(startRecording, 1500); return () => clearTimeout(t) }, [saveMeetingToDB, startRecording])
+    useEffect(() => { if (window.electronAPI?.onMeetingEnded) return window.electronAPI.onMeetingEnded(() => { setMeetingEnded(true); stopRecording() }) }, [stopRecording])
 
     return (
         <div className="w-screen h-screen overflow-hidden" style={{ background: 'transparent' }}>
 
-            {/* ── Single Draggable Panel ─────────────────── */}
+            {/* ── Subtitle strip — draggable, always visible ── */}
+            <div
+                style={{ position: 'fixed', left: subPos.x, top: subPos.y, zIndex: 9998 }}
+                className="max-w-xl w-full"
+                onMouseEnter={onEnter} onMouseLeave={onLeave}
+            >
+                <div
+                    onMouseDown={subOnMouseDown}
+                    className={`rounded-xl backdrop-blur-md px-4 py-2.5 text-center border transition-all cursor-grab active:cursor-grabbing ${subtitleStatus === 'error' ? 'bg-red-900/60 border-red-500/30' : subtitleText || interimText ? 'bg-black/75 border-white/10' : 'bg-black/40 border-white/5'}`}>
+                    {subtitleStatus === 'error' ? (
+                        <span className="text-red-300 text-xs">⚠ Mic not accessible — check browser permissions</span>
+                    ) : subtitleText || interimText ? (
+                        <>
+                            <span className="text-white text-sm leading-relaxed">{subtitleText}</span>
+                            {interimText && <span className="text-white/50 text-sm italic"> {interimText}</span>}
+                        </>
+                    ) : (
+                        <span className="text-white/25 text-xs flex items-center justify-center gap-1.5">
+                            {subtitleStatus === 'listening'
+                                ? <><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block" />Listening…</>
+                                : <><Loader2 className="w-3 h-3 animate-spin inline" /> Starting mic…</>}
+                        </span>
+                    )}
+                </div>
+                <div className="flex justify-center mt-1.5">
+                    <button
+                        onClick={() => setSubtitleLang(l => l === 'en' ? 'hi' : 'en')}
+                        className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/50 border border-white/10 text-[10px] text-white/40 hover:text-white/70 transition-colors backdrop-blur-sm"
+                    >
+                        <Globe className="w-2.5 h-2.5" />
+                        {subtitleLang === 'en' ? '🇺🇸 English' : '🇮🇳 Hindi'} · tap to switch
+                    </button>
+                </div>
+            </div>
+
+            {/* ── Main Panel ── */}
             <div
                 style={{ position: 'fixed', left: pos.x, top: pos.y, width: 360, zIndex: 9999 }}
                 className="rounded-2xl border border-white/15 backdrop-blur-2xl bg-black/60 shadow-2xl overflow-hidden flex flex-col"
-                onMouseEnter={onPanelEnter}
-                onMouseLeave={onPanelLeave}
+                onMouseEnter={onEnter} onMouseLeave={onLeave}
             >
-                {/* Title / drag bar */}
-                <div
-                    onMouseDown={onMouseDown}
-                    className="flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing select-none border-b border-white/10"
-                >
+                {/* Title bar */}
+                <div onMouseDown={onMouseDown} className="flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing select-none border-b border-white/10">
                     <GripHorizontal className="w-3.5 h-3.5 text-white/30" />
                     <div className="flex items-center gap-1.5 flex-1 min-w-0">
                         <div className={`w-1.5 h-1.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-white/20'}`} />
@@ -278,108 +314,86 @@ function OverlayContent() {
                         {isTranscribing && <Loader2 className="w-3 h-3 text-purple-400 animate-spin shrink-0" />}
                     </div>
                     <span className="text-[10px] text-white/30 shrink-0">{info.label}</span>
-                    <button onClick={() => window.close()} className="p-0.5 rounded text-white/30 hover:text-red-400 transition-colors">
-                        <X className="w-3 h-3" />
-                    </button>
+                    <button onClick={() => window.close()} className="p-0.5 rounded text-white/30 hover:text-red-400 transition-colors"><X className="w-3 h-3" /></button>
                 </div>
 
-                {/* Tabs */}
-                <div className="flex border-b border-white/10">
-                    <button
-                        onClick={() => setTab('summary')}
-                        className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${tab === 'summary' ? 'text-white border-b-2 border-primary bg-white/5' : 'text-white/40 hover:text-white/70'}`}
-                    >
-                        <FileText className="w-3 h-3" />
-                        Summary
-                        {isGeneratingSummary && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                    </button>
-                    <button
-                        onClick={() => setTab('chat')}
-                        className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${tab === 'chat' ? 'text-white border-b-2 border-primary bg-white/5' : 'text-white/40 hover:text-white/70'}`}
-                    >
-                        <Bot className="w-3 h-3" />
-                        Ask AI
-                    </button>
-                </div>
-
-                {/* ── Summary Tab ── */}
-                {tab === 'summary' && (
-                    <div className="flex flex-col min-h-0" style={{ maxHeight: 440 }}>
-                        <div className="flex-1 overflow-y-auto p-3">
-                            {liveSummary ? (
-                                <div className="text-xs text-white/75 leading-relaxed whitespace-pre-wrap">{liveSummary}</div>
-                            ) : isGeneratingSummary ? (
-                                <div className="flex flex-col items-center py-10">
-                                    <Loader2 className="w-6 h-6 text-primary animate-spin mb-2" />
-                                    <p className="text-xs text-white/30">Generating summary…</p>
-                                </div>
-                            ) : (
-                                <div className="flex flex-col items-center py-10 text-center">
-                                    <Mic className={`w-6 h-6 mb-2 ${isRecording ? 'text-red-400 animate-pulse' : 'text-white/20'}`} />
-                                    <p className="text-xs text-white/30">{isRecording ? 'Recording… summary updates every 3 transcript chunks' : 'Starting mic…'}</p>
-                                </div>
-                            )}
-                        </div>
-                        {liveSummary && (
-                            <div className="px-3 pb-2 flex justify-end">
-                                <button
-                                    onClick={() => generateLiveSummary(transcript, true)}
-                                    className="flex items-center gap-1 text-[10px] text-white/30 hover:text-primary transition-colors"
-                                >
-                                    <RefreshCw className="w-2.5 h-2.5" /> refresh
+                {/* Meeting ended state — replaces tabs in same panel */}
+                {meetingEnded ? (
+                    <div className="flex flex-col items-center justify-center py-10 px-6 text-center gap-3">
+                        <div className="text-2xl">✅</div>
+                        <p className="text-white/80 text-sm font-medium">Meeting ended</p>
+                        <p className="text-white/40 text-xs leading-relaxed">
+                            Summary will be in <span className="text-primary/80">Past Meetings</span>
+                        </p>
+                        <p className="text-white/20 text-[10px] mt-1">Closing in {countdown}s…</p>
+                    </div>
+                ) : (
+                    <>
+                        {/* Tabs */}
+                        <div className="flex border-b border-white/10">
+                            {(['summary', 'chat'] as const).map(t => (
+                                <button key={t} onClick={() => setTab(t)}
+                                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${tab === t ? 'text-white border-b-2 border-primary bg-white/5' : 'text-white/40 hover:text-white/70'}`}>
+                                    {t === 'summary' ? <><FileText className="w-3 h-3" />Summary{isGeneratingSummary && <Loader2 className="w-2.5 h-2.5 animate-spin" />}</> : <><Bot className="w-3 h-3" />Ask AI</>}
                                 </button>
+                            ))}
+                        </div>
+
+                        {/* Summary tab */}
+                        {tab === 'summary' && (
+                            <div className="flex flex-col" style={{ maxHeight: 440 }}>
+                                <div className="flex-1 overflow-y-auto p-3">
+                                    {liveSummary ? (
+                                        <div className="text-xs text-white/75 leading-relaxed whitespace-pre-wrap">{liveSummary}</div>
+                                    ) : isGeneratingSummary ? (
+                                        <div className="flex flex-col items-center py-10"><Loader2 className="w-6 h-6 text-primary animate-spin mb-2" /><p className="text-xs text-white/30">Generating summary…</p></div>
+                                    ) : (
+                                        <div className="flex flex-col items-center py-10 text-center">
+                                            <Mic className={`w-6 h-6 mb-2 ${isRecording ? 'text-red-400 animate-pulse' : 'text-white/20'}`} />
+                                            <p className="text-xs text-white/30">{isRecording ? 'Recording… summary after 3 transcript chunks' : 'Starting mic…'}</p>
+                                        </div>
+                                    )}
+                                </div>
+                                {liveSummary && (
+                                    <div className="px-3 pb-2 flex justify-end">
+                                        <button onClick={() => generateLiveSummary(transcript, true)} className="flex items-center gap-1 text-[10px] text-white/30 hover:text-primary transition-colors">
+                                            <RefreshCw className="w-2.5 h-2.5" /> refresh
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
-                    </div>
-                )}
 
-                {/* ── Chat Tab ── */}
-                {tab === 'chat' && (
-                    <div className="flex flex-col" style={{ height: 440 }}>
-                        {/* Messages */}
-                        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                            {chatMessages.length === 0 ? (
-                                <div className="flex flex-col items-center py-10 text-center">
-                                    <Bot className="w-6 h-6 text-white/20 mb-2" />
-                                    <p className="text-xs text-white/30">Ask anything about the meeting</p>
-                                    {userName && <p className="text-[10px] text-white/20 mt-1">e.g. "What task was I given?"</p>}
+                        {/* Chat tab */}
+                        {tab === 'chat' && (
+                            <div className="flex flex-col" style={{ height: 440 }}>
+                                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                                    {chatMessages.length === 0 ? (
+                                        <div className="flex flex-col items-center py-10 text-center">
+                                            <Bot className="w-6 h-6 text-white/20 mb-2" />
+                                            <p className="text-xs text-white/30">Ask anything about the meeting</p>
+                                        </div>
+                                    ) : chatMessages.map((msg, i) => (
+                                        <div key={i} className={`px-2.5 py-1.5 rounded-lg text-xs ${msg.role === 'user' ? 'bg-primary/20 border border-primary/30 ml-8' : 'bg-white/5 border border-white/10 mr-6'}`}>
+                                            <p className="text-[10px] text-white/30 mb-0.5">{msg.role === 'user' ? 'You' : '✨ Gemini'}</p>
+                                            {msg.role === 'assistant' && msg.content === '' && isSending && i === chatMessages.length - 1 ? (
+                                                <div className="flex items-center gap-1 py-0.5">{[0, 1, 2].map(j => <span key={j} className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: `${j * 150}ms` }} />)}</div>
+                                            ) : <p className="text-white/75 leading-relaxed whitespace-pre-wrap">{msg.content}</p>}
+                                        </div>
+                                    ))}
+                                    <div ref={chatEndRef} />
                                 </div>
-                            ) : (
-                                chatMessages.map((msg, i) => (
-                                    <div key={i} className={`px-2.5 py-1.5 rounded-lg text-xs ${msg.role === 'user' ? 'bg-primary/20 border border-primary/30 ml-8' : 'bg-white/5 border border-white/10 mr-6'}`}>
-                                        <p className="text-[10px] text-white/30 mb-0.5">{msg.role === 'user' ? 'You' : '✨ Gemini'}</p>
-                                        {msg.role === 'assistant' && msg.content === '' && isSending && i === chatMessages.length - 1 ? (
-                                            <div className="flex items-center gap-1 py-0.5">
-                                                {[0, 1, 2].map(j => <span key={j} className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: `${j * 150}ms` }} />)}
-                                            </div>
-                                        ) : (
-                                            <p className="text-white/75 leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                                        )}
-                                    </div>
-                                ))
-                            )}
-                            <div ref={chatEndRef} />
-                        </div>
-
-                        {/* Input */}
-                        <div className="p-3 border-t border-white/10 flex gap-1.5">
-                            <input
-                                type="text"
-                                value={chatInput}
-                                onChange={e => setChatInput(e.target.value)}
-                                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                                placeholder={userName ? `Ask about ${title}…` : 'Ask about the meeting…'}
-                                className="flex-1 px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-primary/50"
-                            />
-                            <button
-                                onClick={sendMessage}
-                                disabled={!chatInput.trim() || isSending}
-                                className="px-2.5 py-1.5 rounded-lg bg-primary/80 hover:bg-primary text-white transition-colors disabled:opacity-40"
-                            >
-                                {isSending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                            </button>
-                        </div>
-                    </div>
+                                <div className="p-3 border-t border-white/10 flex gap-1.5">
+                                    <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                                        placeholder="Ask about the meeting…"
+                                        className="flex-1 px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-primary/50" />
+                                    <button onClick={sendMessage} disabled={!chatInput.trim() || isSending} className="px-2.5 py-1.5 rounded-lg bg-primary/80 hover:bg-primary text-white transition-colors disabled:opacity-40">
+                                        {isSending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
         </div>
@@ -387,9 +401,5 @@ function OverlayContent() {
 }
 
 export default function OverlayPage() {
-    return (
-        <Suspense fallback={<div style={{ background: 'transparent' }} />}>
-            <OverlayContent />
-        </Suspense>
-    )
+    return <Suspense fallback={<div style={{ background: 'transparent' }} />}><OverlayContent /></Suspense>
 }
