@@ -128,7 +128,40 @@ function useSubtitles(lang: 'en' | 'hi') {
 
 /* ─── types ─────────────────────────────────────────────── */
 interface TranscriptChunk { index: number; text: string; timestamp: string }
-interface ChatMessage { role: 'user' | 'assistant'; content: string }
+interface MeetingEvent { person: string; task: string; deadline: string | null; type: string; isCurrentUser: boolean }
+interface ChatMessage { role: 'user' | 'assistant'; content: string; events?: MeetingEvent[] }
+
+/* ─── Google Calendar URL builder ───────────────────────── */
+function calendarUrl(ev: MeetingEvent, meetingTitle: string): string {
+    const t = encodeURIComponent(ev.task)
+    const details = encodeURIComponent(`From meeting: ${meetingTitle}${ev.deadline ? `\nDeadline: ${ev.deadline}` : ''}`)
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${t}&details=${details}`
+}
+
+/* ─── Markdown renderer ──────────────────────────────────── */
+function renderMd(text: string) {
+    const lines = text.split('\n')
+    const out: React.ReactNode[] = []
+    lines.forEach((line, i) => {
+        const isBullet = /^\s*[\*\-]\s+/.test(line)
+        if (isBullet) {
+            const c = line.replace(/^\s*[\*\-]\s+/, '')
+            out.push(<li key={i} className="ml-3 text-[11px] leading-relaxed list-disc">{renderInlineMd(c)}</li>)
+        } else if (line.trim() === '') {
+            out.push(<div key={i} className="h-1" />)
+        } else {
+            out.push(<p key={i} className="text-[11px] leading-relaxed">{renderInlineMd(line)}</p>)
+        }
+    })
+    return <div className="space-y-0.5">{out}</div>
+}
+function renderInlineMd(text: string): React.ReactNode[] {
+    return text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).map((p, i) => {
+        if (p.startsWith('**') && p.endsWith('**')) return <strong key={i} className="font-semibold text-white/90">{p.slice(2, -2)}</strong>
+        if (p.startsWith('*') && p.endsWith('*')) return <em key={i} className="text-white/70">{p.slice(1, -1)}</em>
+        return p
+    })
+}
 
 /* ─── main ──────────────────────────────────────────────── */
 function OverlayContent() {
@@ -147,6 +180,7 @@ function OverlayContent() {
     const [liveSummary, setLiveSummary] = useState('')
     const [isGeneratingSummary, setIsGeneratingSummary] = useState(false)
     const lastSummarizedCount = useRef(0)
+    const lastEventCheckCount = useRef(0)
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
     const [chatInput, setChatInput] = useState('')
     const [isSending, setIsSending] = useState(false)
@@ -286,7 +320,37 @@ function OverlayContent() {
         finally { setIsSending(false) }
     }, [chatInput, isSending, chatMessages, liveSummary, transcript, userName])
 
-    useEffect(() => { saveMeetingToDB(); const t = setTimeout(startRecording, 1500); return () => clearTimeout(t) }, [saveMeetingToDB, startRecording])
+    /* Event detection — runs after each new transcript chunk */
+    const detectEvents = useCallback(async (chunks: TranscriptChunk[]) => {
+        // Only check every 2 new chunks to save API calls
+        if (chunks.length - lastEventCheckCount.current < 1) return
+        const newChunks = chunks.slice(lastEventCheckCount.current)
+        lastEventCheckCount.current = chunks.length
+        const text = newChunks.map(c => c.text).join(' ')
+        // Quick keyword check before calling AI
+        const keywords = /\b(deadline|due|by|assign|task|calendar|schedule|remind|meeting|event|submit|deliver|complete|finish|send)\b/i
+        if (!keywords.test(text)) return
+        try {
+            const res = await fetch('/api/extract-events', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, userName, meetingTitle: title }),
+            })
+            if (!res.ok) return
+            const { events } = await res.json()
+            if (!events?.length) return
+            // Auto-post a card in chat tab
+            const card: ChatMessage = {
+                role: 'assistant',
+                content: `📅 I noticed ${events.length > 1 ? 'some tasks/deadlines' : 'a task/deadline'} mentioned:`,
+                events,
+            }
+            setChatMessages(prev => [...prev, card])
+            setTab('chat')
+        } catch { }
+    }, [userName, title])
+
+    useEffect(() => { if (transcript.length > 0) detectEvents(transcript) }, [transcript, detectEvents])
+
     useEffect(() => { if (window.electronAPI?.onMeetingEnded) return window.electronAPI.onMeetingEnded(() => { setMeetingEnded(true); stopRecording() }) }, [stopRecording])
 
     return (
@@ -407,13 +471,34 @@ function OverlayContent() {
                                         <div className="flex flex-col items-center py-10 text-center">
                                             <Bot className="w-6 h-6 text-white/20 mb-2" />
                                             <p className="text-xs text-white/30">Ask anything about the meeting</p>
+                                            <p className="text-[10px] text-white/20 mt-1">I'll also alert you to any tasks or deadlines mentioned</p>
                                         </div>
                                     ) : chatMessages.map((msg, i) => (
-                                        <div key={i} className={`px-2.5 py-1.5 rounded-lg text-xs ${msg.role === 'user' ? 'bg-primary/20 border border-primary/30 ml-8' : 'bg-white/5 border border-white/10 mr-6'}`}>
+                                        <div key={i} className={`rounded-lg text-xs ${msg.role === 'user' ? 'bg-primary/20 border border-primary/30 ml-8 px-2.5 py-1.5' : 'bg-white/5 border border-white/10 mr-2 px-2.5 py-1.5'}`}>
                                             <p className="text-[10px] text-white/30 mb-0.5">{msg.role === 'user' ? 'You' : '✨ Gemini'}</p>
                                             {msg.role === 'assistant' && msg.content === '' && isSending && i === chatMessages.length - 1 ? (
                                                 <div className="flex items-center gap-1 py-0.5">{[0, 1, 2].map(j => <span key={j} className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: `${j * 150}ms` }} />)}</div>
-                                            ) : <p className="text-white/75 leading-relaxed whitespace-pre-wrap">{msg.content}</p>}
+                                            ) : msg.role === 'assistant' ? renderMd(msg.content) : <p className="text-white/75 leading-relaxed whitespace-pre-wrap">{msg.content}</p>}
+                                            {msg.events && msg.events.length > 0 && (
+                                                <div className="mt-2 space-y-1.5">
+                                                    {msg.events.map((ev, ei) => (
+                                                        <div key={ei} className={`rounded-lg px-2.5 py-2 border ${ev.isCurrentUser ? 'bg-primary/15 border-primary/30' : 'bg-white/5 border-white/10'}`}>
+                                                            <div className="flex items-start justify-between gap-2">
+                                                                <div className="min-w-0">
+                                                                    <p className="text-white/80 text-[11px] font-medium leading-tight">{ev.task}</p>
+                                                                    <p className="text-white/40 text-[10px] mt-0.5">{ev.person}{ev.deadline ? ` · ${ev.deadline}` : ''}</p>
+                                                                </div>
+                                                                {ev.isCurrentUser && (
+                                                                    <a href={calendarUrl(ev, title)} target="_blank" rel="noreferrer"
+                                                                        className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md bg-primary/80 hover:bg-primary text-white text-[10px] font-medium transition-colors whitespace-nowrap">
+                                                                        📅 Add
+                                                                    </a>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                     <div ref={chatEndRef} />

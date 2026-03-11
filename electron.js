@@ -670,6 +670,12 @@ ipcMain.handle('overlay:ignore-mouse-events', (_event, ignore) => {
   }
 });
 
+// Open URLs in the default system browser (used for Google Calendar OAuth flow)
+const { shell } = require('electron');
+ipcMain.handle('shell:open-external', (_event, url) => {
+  shell.openExternal(url);
+});
+
 ipcMain.handle('permissions:reset', () => {
 
   if (fs.existsSync(PERM_FILE)) fs.unlinkSync(PERM_FILE);

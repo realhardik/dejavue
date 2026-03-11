@@ -10,6 +10,15 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, FileText, MessageSquare, Download, Clock, Calendar, Loader2, Pencil, Check, X } from 'lucide-react'
 import Link from 'next/link'
+import { AddToCalendarButton } from '@/components/add-to-calendar-button'
+
+interface MeetingEvent {
+  person: string
+  task: string
+  deadline: string | null
+  type: string
+  isCurrentUser: boolean
+}
 
 interface MeetingData {
   _id: string
@@ -22,8 +31,10 @@ interface MeetingData {
   transcript: { index: number; text: string; timestamp: string }[]
   summary: string | null
   summaryFilePath: string | null
+  events?: MeetingEvent[]
 }
 
+// gcalUrl removed — using AddToCalendarButton component now
 function formatDuration(ms: number | null): string {
   if (!ms) return '—'
   const totalMin = Math.round(ms / 60000)
@@ -60,7 +71,10 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
+  const [events, setEvents] = useState<MeetingEvent[] | null>(null)
+  const [isExtractingEvents, setIsExtractingEvents] = useState(false)
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const userName = typeof window !== 'undefined' ? (() => { try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.name || u.email || '' } catch { return '' } })() : ''
 
   useEffect(() => {
     fetch(`/api/meetings/${id}`)
@@ -71,8 +85,8 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
       .then(data => {
         setMeeting(data.meeting)
         setEditTitle(data.meeting.title)
-        // Load chat history once — ChatInterface will use this as initial state
         if (Array.isArray(data.meeting.chatHistory)) setChatHistory(data.meeting.chatHistory)
+        if (Array.isArray(data.meeting.events)) setEvents(data.meeting.events)
         setIsLoading(false)
       })
       .catch(err => {
@@ -109,7 +123,36 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
     setIsEditingTitle(false)
   }
 
-  // Memoized — only recalculates when meeting data actually changes
+  const hasExtractedRef = useRef(false)
+
+  // Extract events once from summary (only if not already extracted)
+  const extractAndSaveEvents = useCallback(async (summary: string, meetingTitle: string) => {
+    if (!summary || hasExtractedRef.current) return
+    hasExtractedRef.current = true
+    setIsExtractingEvents(true)
+    try {
+      const res = await fetch('/api/extract-events', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: summary, userName, meetingTitle }),
+      })
+      if (!res.ok) return
+      const { events: extracted } = await res.json()
+      if (!extracted?.length) { setEvents([]); return }
+      setEvents(extracted)
+      await fetch(`/api/meetings/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: extracted }),
+      }).catch(() => { })
+    } catch { setEvents([]) } finally { setIsExtractingEvents(false) }
+  }, [id, userName])
+
+  // Trigger event extraction when summary loads (runs once, guarded by ref)
+  useEffect(() => {
+    if (meeting?.summary && events === null && !isExtractingEvents) {
+      extractAndSaveEvents(meeting.summary, meeting.title)
+    }
+  }, [meeting?.summary, meeting?.title, events, isExtractingEvents, extractAndSaveEvents])
+
   const meetingMoM = useMemo(() => {
     if (!meeting) return ''
     const lines = [
@@ -261,21 +304,26 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
         {/* Content */}
         <main className="p-6">
           <Tabs defaultValue={defaultTab} className="w-full">
-            <TabsList className="grid w-full max-w-md grid-cols-2 border-b border-border/50 bg-transparent">
-              <TabsTrigger
-                value="summary"
-                className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent"
-              >
+            <TabsList className={`grid w-full max-w-2xl border-b border-border/50 bg-transparent ${events?.length ? 'grid-cols-3' : 'grid-cols-2'}`}>
+              <TabsTrigger value="summary" className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent">
                 <FileText className="w-4 h-4 mr-2" />
                 Summary
               </TabsTrigger>
-              <TabsTrigger
-                value="chat"
-                className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent"
-              >
+              <TabsTrigger value="chat" className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent">
                 <MessageSquare className="w-4 h-4 mr-2" />
                 Chat with AI
               </TabsTrigger>
+              {events?.length ? (
+                <TabsTrigger value="events" className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent">
+                  <Calendar className="w-4 h-4 mr-2" />
+                  Deadlines
+                  <span className="ml-1.5 text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">{events.length}</span>
+                </TabsTrigger>
+              ) : isExtractingEvents ? (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Analysing…
+                </div>
+              ) : null}
             </TabsList>
 
             {/* Summary Tab */}
@@ -322,6 +370,56 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
                 />
               </Card>
             </TabsContent>
+
+            {/* Deadlines / Events Tab */}
+            {events?.length ? (
+              <TabsContent value="events" className="mt-6 space-y-3">
+                {/* User's events first */}
+                {events.filter(e => e.isCurrentUser).length > 0 && (
+                  <>
+                    <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-primary inline-block" />
+                      Your Tasks &amp; Deadlines
+                    </h3>
+                    {events.filter(e => e.isCurrentUser).map((ev, i) => (
+                      <Card key={i} className="p-4 border-primary/30 bg-primary/5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="font-medium text-foreground text-sm">{ev.task}</p>
+                            {ev.deadline && <p className="text-xs text-muted-foreground mt-1">📅 {ev.deadline}</p>}
+                            <Badge className="mt-2 text-[10px] bg-primary/15 text-primary border-0 capitalize">{ev.type}</Badge>
+                          </div>
+                          <AddToCalendarButton
+                            task={ev.task}
+                            deadline={ev.deadline}
+                            meetingTitle={meeting.title}
+                            size="full"
+                          />
+                        </div>
+                      </Card>
+                    ))}
+                    {events.filter(e => !e.isCurrentUser).length > 0 && (
+                      <div className="border-t border-border/50 pt-3 mt-4">
+                        <h3 className="text-sm font-semibold text-foreground mb-3">Others</h3>
+                      </div>
+                    )}
+                  </>
+                )}
+                {/* Others */}
+                {events.filter(e => !e.isCurrentUser).map((ev, i) => (
+                  <Card key={i} className="p-4 border-border/50">
+                    <div className="flex items-start gap-4">
+                      <div className="min-w-0">
+                        <p className="font-medium text-foreground text-sm">{ev.task}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">Assigned to: {ev.person}</p>
+                        {ev.deadline && <p className="text-xs text-muted-foreground mt-0.5">📅 {ev.deadline}</p>}
+                        <Badge className="mt-2 text-[10px] bg-secondary text-muted-foreground border-0 capitalize">{ev.type}</Badge>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </TabsContent>
+            ) : null}
           </Tabs>
         </main>
       </div>
