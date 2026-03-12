@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, FileText, MessageSquare, Download, Clock, Calendar, Loader2, Pencil, Check, X } from 'lucide-react'
 import Link from 'next/link'
 import { AddToCalendarButton } from '@/components/add-to-calendar-button'
-import { useTasks } from '@/contexts/tasks-context'
+
 
 interface MeetingEvent {
   person: string
@@ -72,18 +72,33 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
-  const [fallbackEvents, setFallbackEvents] = useState<MeetingEvent[] | null>(null)
-  const [isExtractingEvents, setIsExtractingEvents] = useState(false)
+  const [dbTasks, setDbTasks] = useState<MeetingEvent[] | null>(null)
+  const [isLoadingTasks, setIsLoadingTasks] = useState(true)
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const userId = typeof window !== 'undefined' ? (() => { try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.id || u._id || '' } catch { return '' } })() : ''
   const userName = typeof window !== 'undefined' ? (() => { try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.name || u.email || '' } catch { return '' } })() : ''
 
-  // Read tasks from global context
-  const { tasksByMeeting, isLoading: tasksLoading } = useTasks()
-  const contextTasks = tasksByMeeting(id)
-  // Show tasks from context if available, otherwise local fallback extraction
-  const events: MeetingEvent[] = contextTasks.length > 0
-    ? contextTasks.map(t => ({ person: t.person, task: t.task, deadline: t.deadline, type: t.type, isCurrentUser: t.isCurrentUser }))
-    : (fallbackEvents ?? [])
+  // Always fetch tasks directly from DB for this meeting (context may be stale)
+  useEffect(() => {
+    if (!userId) return
+    setIsLoadingTasks(true)
+    fetch(`/api/tasks?userId=${userId}&meetingId=${id}`)
+      .then(r => r.ok ? r.json() : { tasks: [] })
+      .then(data => {
+        const rows = (data.tasks || []) as Array<Record<string, unknown>>
+        setDbTasks(rows.map(t => ({
+          person: t.person as string ?? '',
+          task: t.task as string ?? '',
+          deadline: t.deadline as string | null ?? null,
+          type: t.type as string ?? 'task',
+          isCurrentUser: t.isCurrentUser as boolean ?? false,
+        })))
+      })
+      .catch(() => setDbTasks([]))
+      .finally(() => setIsLoadingTasks(false))
+  }, [id, userId])
+
+  const events: MeetingEvent[] = dbTasks ?? []
 
   useEffect(() => {
     fetch(`/api/meetings/${id}`)
@@ -95,7 +110,6 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
         setMeeting(data.meeting)
         setEditTitle(data.meeting.title)
         if (Array.isArray(data.meeting.chatHistory)) setChatHistory(data.meeting.chatHistory)
-        if (Array.isArray(data.meeting.events)) setFallbackEvents(data.meeting.events)
         setIsLoading(false)
       })
       .catch(err => {
@@ -131,31 +145,6 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
     }
     setIsEditingTitle(false)
   }
-
-  const hasExtractedRef = useRef(false)
-
-  // Fallback: extract from summary if no tasks in context (older meetings only)
-  const extractAndSaveEvents = useCallback(async (summary: string, meetingTitle: string) => {
-    if (!summary || hasExtractedRef.current || contextTasks.length > 0) return
-    hasExtractedRef.current = true
-    setIsExtractingEvents(true)
-    try {
-      const res = await fetch('/api/extract-events', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: summary, userName, meetingTitle }),
-      })
-      if (!res.ok) return
-      const { events: extracted } = await res.json()
-      setFallbackEvents(extracted?.length ? extracted : [])
-    } catch { setFallbackEvents([]) } finally { setIsExtractingEvents(false) }
-  }, [id, userName, contextTasks.length])
-
-  // Trigger event extraction when summary loads (runs once, guarded by ref)
-  useEffect(() => {
-    if (meeting?.summary && fallbackEvents === null && !isExtractingEvents && contextTasks.length === 0 && !tasksLoading) {
-      extractAndSaveEvents(meeting.summary, meeting.title)
-    }
-  }, [meeting?.summary, meeting?.title, fallbackEvents, isExtractingEvents, extractAndSaveEvents, contextTasks.length, tasksLoading])
 
   const meetingMoM = useMemo(() => {
     if (!meeting) return ''
@@ -323,9 +312,9 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
                   Deadlines
                   <span className="ml-1.5 text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">{events.length}</span>
                 </TabsTrigger>
-              ) : isExtractingEvents ? (
+              ) : isLoadingTasks ? (
                 <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Analysing…
+                  <Loader2 className="w-3 h-3 animate-spin" /> Loading…
                 </div>
               ) : null}
             </TabsList>

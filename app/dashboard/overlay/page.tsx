@@ -2,7 +2,7 @@
 
 import { useSearchParams } from 'next/navigation'
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
-import { Bot, Mic, Send, Loader2, FileText, X, GripHorizontal, RefreshCw, Globe } from 'lucide-react'
+import { Bot, Mic, Send, Loader2, FileText, X, GripHorizontal, RefreshCw } from 'lucide-react'
 
 /* ─── draggable hook ────────────────────────────────────── */
 function useDraggable(initialPos: { x: number; y: number }) {
@@ -25,16 +25,16 @@ function useDraggable(initialPos: { x: number; y: number }) {
 }
 
 /* ─── subtitle hook (Transformers.js Worker) ────── */
-function useSubtitles(lang: 'en' | 'hi') {
+function useSubtitles() {
     const [subtitleText, setSubtitleText] = useState('')
-    const [status, setStatus] = useState<'starting' | 'listening' | 'error' | 'loading'>('loading')
+    const [interimText] = useState('')
+    const [status, setStatus] = useState<'loading' | 'starting' | 'listening' | 'error'>('loading')
     const [progress, setProgress] = useState(0)
     const workerRef = useRef<Worker | null>(null)
     const mediaRecorderRef = useRef<MediaRecorder | null>(null)
     const streamRef = useRef<MediaStream | null>(null)
     const activeRef = useRef(false)
 
-    // Setup worker
     useEffect(() => {
         workerRef.current = new Worker('/worker.js', { type: 'module' })
         workerRef.current.onmessage = (e) => {
@@ -43,10 +43,8 @@ function useSubtitles(lang: 'en' | 'hi') {
             if (s === 'ready') setStatus('starting')
             if (s === 'complete' && text?.trim()) {
                 setSubtitleText(prev => {
-                    const prevWords = prev.trim().split(/\s+/).filter(Boolean)
-                    // If we already have 10+ words showing, reset to just the new chunk
-                    if (prevWords.length >= 10) return text.trim()
-                    // Otherwise append
+                    const words = prev.trim().split(/\s+/).filter(Boolean)
+                    if (words.length >= 10) return text.trim()
                     return (prev + ' ' + text.trim()).trim()
                 })
             }
@@ -62,7 +60,6 @@ function useSubtitles(lang: 'en' | 'hi') {
             streamRef.current = stream
             activeRef.current = true
             setStatus('listening')
-
             const startChunk = () => {
                 if (!activeRef.current || !streamRef.current) return
                 const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' })
@@ -77,21 +74,17 @@ function useSubtitles(lang: 'en' | 'hi') {
                             const arrayBuffer = await blob.arrayBuffer()
                             const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
                             const audioData = audioBuffer.getChannelData(0)
-                            workerRef.current.postMessage({ type: 'transcribe', audio: audioData, lang })
-                        } catch (e) { console.error('Audio decode err', e) }
+                            workerRef.current.postMessage({ type: 'transcribe', audio: audioData })
+                        } catch { }
                     }
-                    if (activeRef.current) startChunk() // Loop
+                    if (activeRef.current) startChunk()
                 }
-                // Record 6 second chunks for subtitles — more context = better accuracy
                 mr.start()
                 setTimeout(() => { if (mr.state === 'recording') mr.stop() }, 3000)
             }
             startChunk()
-
-        } catch (e) {
-            setStatus('error')
-        }
-    }, [status, lang])
+        } catch { setStatus('error') }
+    }, [status])
 
     const stopRecording = useCallback(() => {
         activeRef.current = false
@@ -108,22 +101,9 @@ function useSubtitles(lang: 'en' | 'hi') {
         }
     }, [status, startRecording, stopRecording])
 
-    // When language changes, force-stop and restart with new lang
-    useEffect(() => {
-        if (status === 'loading') return // don't interrupt model download
-        activeRef.current = false
-        if (mediaRecorderRef.current?.state === 'recording') {
-            try { mediaRecorderRef.current.stop() } catch { }
-        }
-        if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
-        setSubtitleText('')
-        setStatus('starting') // triggers the recording restart effect above
-    }, [lang]) // eslint-disable-line
-
-    // Cleanup on unmount
     useEffect(() => () => stopRecording(), [stopRecording])
 
-    return { subtitleText, interimText: '', status, progress }
+    return { subtitleText, interimText, status, progress }
 }
 
 /* ─── types ─────────────────────────────────────────────── */
@@ -175,20 +155,19 @@ function OverlayContent() {
     const [isTranscribing, setIsTranscribing] = useState(false)
     const [transcript, setTranscript] = useState<TranscriptChunk[]>([])
     const [meetingEnded, setMeetingEnded] = useState(false)
+    const [isFinalized, setIsFinalized] = useState(false)
     const [countdown, setCountdown] = useState(3)
     const [tab, setTab] = useState<'summary' | 'chat'>('summary')
     const [liveSummary, setLiveSummary] = useState('')
     const [isGeneratingSummary, setIsGeneratingSummary] = useState(false)
     const lastSummarizedCount = useRef(0)
-    const lastEventCheckCount = useRef(0)
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
     const [chatInput, setChatInput] = useState('')
     const [isSending, setIsSending] = useState(false)
-    const [subtitleLang, setSubtitleLang] = useState<'en' | 'hi'>('en')
 
     const { pos, onMouseDown } = useDraggable({ x: typeof window !== 'undefined' ? window.innerWidth - 380 : 800, y: 80 })
     const { pos: subPos, onMouseDown: subOnMouseDown } = useDraggable({ x: typeof window !== 'undefined' ? window.innerWidth / 2 - 200 : 400, y: typeof window !== 'undefined' ? window.innerHeight - 120 : 800 })
-    const { subtitleText, interimText, status: subtitleStatus, progress } = useSubtitles(subtitleLang)
+    const { subtitleText, interimText, status: subtitleStatus, progress } = useSubtitles()
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null)
     const audioChunksRef = useRef<Blob[]>([])
@@ -213,9 +192,10 @@ function OverlayContent() {
 
     useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
 
-    // Countdown when meeting ends — stays in the same panel
+    // Countdown only starts AFTER finalizeMeeting completes — prevents window.close()
+    // from killing in-flight Gemini/DB requests before the summary is saved
     useEffect(() => {
-        if (!meetingEnded) return
+        if (!isFinalized) return
         const iv = setInterval(() => {
             setCountdown(c => {
                 if (c <= 1) { clearInterval(iv); try { window.close() } catch { } return 0 }
@@ -223,7 +203,7 @@ function OverlayContent() {
             })
         }, 1000)
         return () => clearInterval(iv)
-    }, [meetingEnded])
+    }, [isFinalized])
 
     /* Transcription */
     const transcribeChunk = useCallback(async (blob: Blob) => {
@@ -288,12 +268,6 @@ function OverlayContent() {
         } catch { }
     }, [meetingId, title, platform])
 
-    const updateMeetingInDB = useCallback(async (t: TranscriptChunk[], s: string | null) => {
-        if (!dbMeetingIdRef.current) return
-        const endedAt = new Date()
-        await fetch(`/api/meetings/${dbMeetingIdRef.current}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'completed', endedAt: endedAt.toISOString(), durationMs: endedAt.getTime() - meetingStartTimeRef.current.getTime(), transcript: t, summary: s }) }).catch(() => { })
-    }, [])
-
     /* Summary */
     const generateLiveSummary = useCallback(async (chunks: TranscriptChunk[], force = false) => {
         if (chunks.length === 0) return
@@ -305,43 +279,44 @@ function OverlayContent() {
         } catch { } finally { setIsGeneratingSummary(false) }
     }, [title, platform])
 
-    // Post-meeting finalization: update title + save tasks
+    // Post-meeting finalization: mark completed + hand off to main process background worker
     const finalizeMeeting = useCallback(async (chunks: TranscriptChunk[]) => {
-        if (chunks.length === 0 || !dbMeetingIdRef.current) return
-        setIsGeneratingSummary(true)
-        try {
-            const transcript = chunks.map(c => `[${c.timestamp}] ${c.text}`).join('\n')
-            const res = await fetch('/api/generate-summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meetingTranscript: transcript, meetingTitle: title, platform }) })
-            if (!res.ok) return
-            const { summary: finalSummary, suggestedTitle } = await res.json()
-            setLiveSummary(finalSummary || '')
+        if (!dbMeetingIdRef.current) return
 
-            // 1. Patch title if Gemini gave us one
-            const newTitle = suggestedTitle || title || platform
-            if (newTitle && dbMeetingIdRef.current) {
-                await fetch(`/api/meetings/${dbMeetingIdRef.current}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTitle }) }).catch(() => { })
-            }
+        const endedAt = new Date()
+        const durationMs = endedAt.getTime() - meetingStartTimeRef.current.getTime()
+        const transcriptText = chunks.map(c => `[${c.timestamp}] ${c.text}`).join('\n')
 
-            // 2. Save meeting as completed with final summary
-            const endedAt = new Date()
-            await fetch(`/api/meetings/${dbMeetingIdRef.current}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'completed', endedAt: endedAt.toISOString(), durationMs: endedAt.getTime() - meetingStartTimeRef.current.getTime(), transcript: chunks, summary: finalSummary }) }).catch(() => { })
+        // 1. Mark completed + save transcript immediately
+        await fetch(`/api/meetings/${dbMeetingIdRef.current}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'completed', endedAt: endedAt.toISOString(), durationMs, transcript: chunks })
+        }).catch(() => { })
 
-            // 3. Extract events → save to tasks collection
-            if (finalSummary && dbMeetingIdRef.current) {
-                const user = localStorage.getItem('user'); const userId = user ? JSON.parse(user)._id || JSON.parse(user).id : null
-                const extractRes = await fetch('/api/extract-events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: finalSummary, userName }) }).catch(() => null)
-                if (extractRes?.ok) {
-                    const { events } = await extractRes.json()
-                    if (Array.isArray(events) && events.length > 0 && userId) {
-                        await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, meetingId: dbMeetingIdRef.current, meetingTitle: newTitle, tasks: events }) }).catch(() => { })
-                    }
-                }
-            }
-        } catch { } finally { setIsGeneratingSummary(false) }
+        // 2. Hand off summary/title/tasks to main process — runs in background after overlay closes
+        if (chunks.length > 0 && window.electronAPI?.finalizeMeeting) {
+            let userId = ''
+            try { const u = JSON.parse(localStorage.getItem('user') || '{}'); userId = u.id || u._id || '' } catch { }
+            window.electronAPI.finalizeMeeting({
+                dbMeetingId: dbMeetingIdRef.current,
+                transcript: transcriptText,
+                meetingTitle: title,
+                platform,
+                userName,
+                userId,
+            })
+        }
+
+        // 3. Overlay is done — start the countdown immediately
+        setIsFinalized(true)
     }, [title, platform, userName])
 
     useEffect(() => { if (transcript.length > 0) generateLiveSummary(transcript) }, [transcript, generateLiveSummary])
-    useEffect(() => { if (meetingEnded && transcript.length > 0) finalizeMeeting(transcript) }, [meetingEnded]) // eslint-disable-line
+    useEffect(() => {
+        if (!meetingEnded) return
+        // Always finalize (even if no transcript) — overlay should close in 3s
+        finalizeMeeting(transcript)
+    }, [meetingEnded]) // eslint-disable-line
 
     /* Chat */
     const sendMessage = useCallback(async () => {
@@ -361,37 +336,6 @@ function OverlayContent() {
         } catch { setChatMessages(prev => [...prev, { role: 'assistant', content: 'Something went wrong.' }]) }
         finally { setIsSending(false) }
     }, [chatInput, isSending, chatMessages, liveSummary, transcript, userName])
-
-    /* Event detection — runs after each new transcript chunk */
-    const detectEvents = useCallback(async (chunks: TranscriptChunk[]) => {
-        // Only check every 2 new chunks to save API calls
-        if (chunks.length - lastEventCheckCount.current < 1) return
-        const newChunks = chunks.slice(lastEventCheckCount.current)
-        lastEventCheckCount.current = chunks.length
-        const text = newChunks.map(c => c.text).join(' ')
-        // Quick keyword check before calling AI
-        const keywords = /\b(deadline|due|by|assign|task|calendar|schedule|remind|meeting|event|submit|deliver|complete|finish|send)\b/i
-        if (!keywords.test(text)) return
-        try {
-            const res = await fetch('/api/extract-events', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, userName, meetingTitle: title }),
-            })
-            if (!res.ok) return
-            const { events } = await res.json()
-            if (!events?.length) return
-            // Auto-post a card in chat tab
-            const card: ChatMessage = {
-                role: 'assistant',
-                content: `📅 I noticed ${events.length > 1 ? 'some tasks/deadlines' : 'a task/deadline'} mentioned:`,
-                events,
-            }
-            setChatMessages(prev => [...prev, card])
-            setTab('chat')
-        } catch { }
-    }, [userName, title])
-
-    useEffect(() => { if (transcript.length > 0) detectEvents(transcript) }, [transcript, detectEvents])
 
     useEffect(() => { if (window.electronAPI?.onMeetingEnded) return window.electronAPI.onMeetingEnded(() => { setMeetingEnded(true); stopRecording() }) }, [stopRecording])
 
@@ -414,10 +358,10 @@ function OverlayContent() {
                     onMouseDown={subOnMouseDown}
                     className={`rounded-xl backdrop-blur-md px-4 py-2.5 text-center border transition-all cursor-grab active:cursor-grabbing ${subtitleStatus === 'error' ? 'bg-red-900/60 border-red-500/30' : subtitleText || interimText ? 'bg-black/75 border-white/10' : 'bg-black/40 border-white/5'}`}>
                     {subtitleStatus === 'error' ? (
-                        <span className="text-red-300 text-xs">⚠ Mic not accessible or worker error</span>
+                        <span className="text-red-300 text-xs">⚠ Mic not accessible</span>
                     ) : subtitleStatus === 'loading' ? (
                         <div className="flex flex-col items-center gap-1.5">
-                            <span className="text-white/40 text-xs">Downloading offline models ({progress}%)…</span>
+                            <span className="text-white/40 text-xs">Loading speech model ({progress}%)…</span>
                             <div className="w-48 h-1 bg-white/10 rounded-full overflow-hidden">
                                 <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
                             </div>
@@ -435,15 +379,7 @@ function OverlayContent() {
                         </span>
                     )}
                 </div>
-                <div className="flex justify-center mt-1.5">
-                    <button
-                        onClick={() => setSubtitleLang(l => l === 'en' ? 'hi' : 'en')}
-                        className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/50 border border-white/10 text-[10px] text-white/40 hover:text-white/70 transition-colors backdrop-blur-sm"
-                    >
-                        <Globe className="w-2.5 h-2.5" />
-                        {subtitleLang === 'en' ? '🇺🇸 English' : '🇮🇳 Hindi'} · tap to switch
-                    </button>
-                </div>
+
             </div>
 
             {/* ── Main Panel ── */}

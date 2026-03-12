@@ -9,22 +9,15 @@ export async function POST(req: Request) {
       return Response.json({ error: 'No transcript provided' }, { status: 400 })
     }
 
-    // Run summary and title generation in parallel
-    const [summaryResult, titleResult] = await Promise.all([
-      generateText({
-        model: google('gemini-2.5-flash'),
-        system: `You are an expert meeting analyst. Generate comprehensive, well-formatted meeting minutes.
+    const result = await generateText({
+      model: google('gemini-2.5-flash'),
+      system: `You are an expert meeting analyst. Generate comprehensive, well-formatted meeting minutes.
 Focus on accuracy and actionable outcomes. Format your response as clean, readable text.`,
-        prompt: `Analyze this meeting transcript and generate a complete summary:
+      prompt: `Analyze this meeting transcript and respond with the following structure EXACTLY:
 
-Meeting Title: ${meetingTitle || 'Untitled Meeting'}
-Date: ${new Date().toLocaleDateString()}
+TITLE: <a short descriptive meeting title, max 7 words, no quotes, no trailing punctuation>
 
-Transcript:
-${meetingTranscript}
-
-Please provide:
-
+SUMMARY:
 1. EXECUTIVE SUMMARY
    A brief 2-3 sentence overview of the meeting.
 
@@ -38,21 +31,29 @@ Please provide:
    Main topics covered during the meeting.
 
 5. NEXT STEPS
-   Any follow-up items or next meeting plans discussed.`,
-      }),
-      generateText({
-        model: google('gemini-2.5-flash'),
-        prompt: `Based on this meeting transcript, generate a short, descriptive meeting title (maximum 7 words, no quotes, no punctuation at end).
-Only respond with the title itself, nothing else.
+   Any follow-up items or next meeting plans discussed.
 
-Transcript (first 1500 chars):
-${meetingTranscript.slice(0, 1500)}`,
-      }),
-    ])
+---
+Meeting Title: ${meetingTitle || 'Untitled Meeting'}
+Date: ${new Date().toLocaleDateString()}
 
-    const suggestedTitle = titleResult.text?.trim().replace(/^["']|["']$/g, '').slice(0, 60) || null
+Transcript:
+${meetingTranscript}`,
+    })
 
-    return Response.json({ summary: summaryResult.text, suggestedTitle })
+    const raw = result.text || ''
+
+    // Parse TITLE: line
+    const titleMatch = raw.match(/^TITLE:\s*(.+)$/m)
+    const suggestedTitle = titleMatch
+      ? titleMatch[1].trim().replace(/^["']|["']$/g, '').slice(0, 60)
+      : null
+
+    // Everything after SUMMARY: is the summary body
+    const summaryMatch = raw.match(/SUMMARY:\s*([\s\S]+)/)
+    const summary = summaryMatch ? summaryMatch[1].trim() : raw.trim()
+
+    return Response.json({ summary, suggestedTitle })
   } catch (error) {
     console.error('[Summary API] Error:', error)
     return Response.json({ error: 'Failed to generate summary' }, { status: 500 })

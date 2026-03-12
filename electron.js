@@ -639,10 +639,92 @@ ipcMain.handle('desktop-capturer:get-sources', async () => {
   }
 });
 
+
 // Renderer registers its DB meeting _id so main process can finalize it on quit
 ipcMain.handle('meeting:register-db-id', (_event, dbId) => {
   activeMeetingDbId = dbId;
   console.log(`[Dejavue] Registered active meeting DB id: ${dbId}`);
+});
+
+// Background finalization: overlay fires this and closes immediately.
+// Main process calls generate-summary + patches DB with summary/title/tasks.
+ipcMain.handle('meeting:finalize', (_event, { dbMeetingId, transcript, meetingTitle, platform, userName, userId }) => {
+  // Fire-and-forget — don't await, overlay can close right away
+  (async () => {
+    const http = require('http');
+    const port = 3000;
+
+    const httpPost = (path, bodyObj) => new Promise((resolve) => {
+      const body = JSON.stringify(bodyObj);
+      const req = http.request(
+        { hostname: 'localhost', port, path, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+        (res) => {
+          let data = '';
+          res.on('data', chunk => { data += chunk; });
+          res.on('end', () => { try { resolve({ ok: res.statusCode < 300, json: JSON.parse(data) }); } catch { resolve({ ok: false, json: {} }); } });
+        }
+      );
+      req.on('error', () => resolve({ ok: false, json: {} }));
+      req.write(body);
+      req.end();
+    });
+
+    const httpPatch = (path, bodyObj) => new Promise((resolve) => {
+      const body = JSON.stringify(bodyObj);
+      const req = http.request(
+        { hostname: 'localhost', port, path, method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+        () => resolve(true)
+      );
+      req.on('error', () => resolve(false));
+      req.write(body);
+      req.end();
+    });
+
+    try {
+      console.log(`[Dejavue] Background finalize started for meeting ${dbMeetingId}`);
+
+      // 1. Call generate-summary
+      const summaryRes = await httpPost('/api/generate-summary', {
+        meetingTranscript: transcript,
+        meetingTitle,
+        platform,
+      });
+
+      if (!summaryRes.ok) {
+        console.error('[Dejavue] Background finalize: summary failed', summaryRes.json);
+        return;
+      }
+
+      const { summary, suggestedTitle } = summaryRes.json;
+      const finalTitle = suggestedTitle || meetingTitle || platform;
+
+      // 2. Patch meeting with summary + title
+      await httpPatch(`/api/meetings/${dbMeetingId}`, { summary, title: finalTitle });
+      console.log(`[Dejavue] Background finalize: summary + title saved for ${dbMeetingId}`);
+
+      // 3. Extract events → tasks
+      if (summary) {
+        const eventsRes = await httpPost('/api/extract-events', { summary, userName });
+        if (eventsRes.ok && Array.isArray(eventsRes.json.events) && eventsRes.json.events.length > 0) {
+          const taskRes = await httpPost('/api/tasks', {
+            userId,
+            meetingId: dbMeetingId,
+            meetingTitle: finalTitle,
+            tasks: eventsRes.json.events,
+          });
+          if (taskRes.ok) {
+            console.log(`[Dejavue] Background finalize: ${eventsRes.json.events.length} tasks saved`);
+          } else {
+            console.error('[Dejavue] Background finalize: tasks save failed', taskRes.json);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Dejavue] Background finalize error:', err);
+    }
+  })();
+
+  return true; // immediate return so overlay can close
 });
 
 // On quit (even Ctrl-C / force-quit mid-meeting), mark the active meeting as completed

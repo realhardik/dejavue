@@ -38,6 +38,8 @@ interface ElectronAPI {
     setIgnoreMouseEvents: (ignore: boolean) => Promise<void>
     // Register active meeting DB id for quit-time cleanup
     registerMeetingDbId: (dbId: string) => Promise<void>
+    // Hand off background finalization to main process (summary + title + tasks)
+    finalizeMeeting: (payload: { dbMeetingId: string; transcript: string; meetingTitle: string; platform: string; userName: string; userId: string }) => Promise<boolean>
     // Open URL in system browser
     openExternal: (url: string) => Promise<void>
 }

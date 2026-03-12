@@ -41,7 +41,8 @@ export async function PATCH(
             return NextResponse.json({ error: 'Invalid meeting ID' }, { status: 400 })
         }
 
-        const body = await request.json()
+        let body: Record<string, unknown>
+        try { body = await request.json() } catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }) }
         const updateFields: Record<string, unknown> = {}
 
         if (body.title !== undefined) updateFields.title = body.title
@@ -49,7 +50,7 @@ export async function PATCH(
         if (body.summary !== undefined) updateFields.summary = body.summary
         if (body.summaryFilePath !== undefined) updateFields.summaryFilePath = body.summaryFilePath
         if (body.status !== undefined) updateFields.status = body.status
-        if (body.endedAt !== undefined) updateFields.endedAt = new Date(body.endedAt)
+        if (body.endedAt !== undefined) updateFields.endedAt = new Date(body.endedAt as string)
         if (body.durationMs !== undefined) updateFields.durationMs = body.durationMs
         if (body.chatHistory !== undefined) updateFields.chatHistory = body.chatHistory
         if (body.events !== undefined) updateFields.events = body.events

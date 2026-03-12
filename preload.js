@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Register the active meeting's DB _id so main process can finalize it on quit
   registerMeetingDbId: (dbId) => ipcRenderer.invoke('meeting:register-db-id', dbId),
 
-  // Open a URL in the default system browser (used for Google Calendar OAuth)
+  // Hand off background finalization (summary + title + tasks) to main process
+  // so the overlay can close immediately without waiting for Gemini calls.
+  finalizeMeeting: (payload) => ipcRenderer.invoke('meeting:finalize', payload),
+
+
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 });
